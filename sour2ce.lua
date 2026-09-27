@@ -66,14 +66,6 @@ end
 
 local now = os.clock()
 
-if devsignature_sig then
-	print([[        Luarmor - Lua whitelist service
-        This is a signature - If you are seeing this, you know what not to do :3
-        Have a good day!
-        https://luarmor.net/
-    ]])
-end
-
 local flag2 = nil
 local flag3 = nil
 local v2 = ({ table.unpack(v, 1, v.n) })[3]
