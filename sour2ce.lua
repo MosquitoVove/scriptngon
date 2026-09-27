@@ -1,23 +1,3 @@
-local function luraph_runtime1(...)
-	error("Luraph runtime function, not devirtualized")
-end
-
-local v = table.pack(...)
-
-if not ce_like_loadstring_fn then
-	if not l_fastload_enabled or not is_from_loader then
-		game:GetService("Players").LocalPlayer:Kick("[Luarmor]: Use the loadstring, do not run this directly")
-		wait(5)
-
-		while true do
-		end
-	end
-end
-
-local str = "?"
-loadstring = ce_like_loadstring_fn or loadstring
-local flag = false
-
 pcall(function()
 	flag = true
 	local UserGameSettings = UserSettings():GetService("UserGameSettings")
