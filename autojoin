@@ -1,1 +1,230 @@
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 
+local TARGET_USERNAME = "retyuioplkjds"
+local RETRY_DELAY = 10
+
+--------------------------------------------------
+-- HTTP REQUEST
+--------------------------------------------------
+
+local function httpRequest(options)
+    if request then
+        return request(options)
+    elseif http_request then
+        return http_request(options)
+    elseif syn and syn.request then
+        return syn.request(options)
+    elseif http and http.request then
+        return http.request(options)
+    end
+
+    error("Executor does not support HTTP requests.")
+end
+
+--------------------------------------------------
+-- USERNAME -> USER ID
+--------------------------------------------------
+
+local function GetUserId(username)
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = "https://users.roblox.com/v1/usernames/users",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode({
+                usernames = {username},
+                excludeBannedUsers = false
+            })
+        })
+    end)
+
+    if not success or not response or response.StatusCode ~= 200 then
+        return nil
+    end
+
+    local success2, data = pcall(function()
+        return HttpService:JSONDecode(response.Body)
+    end)
+
+    if not success2 or not data then
+        return nil
+    end
+
+    if data.data and data.data[1] then
+        return data.data[1].id
+    end
+
+    return nil
+end
+
+--------------------------------------------------
+-- GET PRESENCE
+--------------------------------------------------
+
+local function GetPresence(userId)
+    local success, response = pcall(function()
+        return httpRequest({
+            Url = "https://presence.roblox.com/v1/presence/users",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = HttpService:JSONEncode({
+                userIds = {userId}
+            })
+        })
+    end)
+
+    if not success or not response or response.StatusCode ~= 200 then
+        return nil
+    end
+
+    local success2, data = pcall(function()
+        return HttpService:JSONDecode(response.Body)
+    end)
+
+    if not success2 or not data then
+        return nil
+    end
+
+    return data.userPresences and data.userPresences[1]
+end
+
+--------------------------------------------------
+-- CHECK TARGET IN CURRENT SERVER
+--------------------------------------------------
+
+local function IsTargetHere(userId)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.UserId == userId then
+            return true
+        end
+    end
+
+    return false
+end
+
+--------------------------------------------------
+-- GET USER ID
+--------------------------------------------------
+
+local userId
+
+while not userId do
+    userId = GetUserId(TARGET_USERNAME)
+
+    if not userId then
+        warn("Unable to get UserId. Retrying...")
+        task.wait(RETRY_DELAY)
+    end
+end
+
+print("Target:", TARGET_USERNAME)
+print("UserId:", userId)
+
+--------------------------------------------------
+-- MAIN LOOP
+--------------------------------------------------
+
+while true do
+
+    --------------------------------------------------
+    -- 1. TARGET IS IN CURRENT SERVER
+    --------------------------------------------------
+
+    if IsTargetHere(userId) then
+
+        print("Target is currently in this server.")
+
+        --------------------------------------------------
+        -- WAIT UNTIL TARGET LEAVES
+        --------------------------------------------------
+
+        repeat
+            task.wait(RETRY_DELAY)
+        until not IsTargetHere(userId)
+
+        print("Target left the server.")
+        print("Searching for target again...")
+
+        --------------------------------------------------
+        -- IMPORTANT:
+        -- Do NOT return.
+        -- Continue the main loop.
+        --------------------------------------------------
+
+    else
+
+        --------------------------------------------------
+        -- 2. TARGET NOT IN CURRENT SERVER
+        -- GET CURRENT PRESENCE
+        --------------------------------------------------
+
+        local presence = GetPresence(userId)
+
+        if presence and presence.userPresenceType == 2 then
+
+            local targetPlaceId = tonumber(presence.placeId)
+            local targetJobId = presence.gameId
+
+            if targetPlaceId and targetJobId then
+
+                --------------------------------------------------
+                -- 3. TARGET MAY HAVE JUST JOINED THIS SERVER
+                --------------------------------------------------
+
+                if IsTargetHere(userId) then
+                    print("Target joined this server.")
+                    continue
+                end
+
+                --------------------------------------------------
+                -- 4. ALREADY AT TARGET SERVER
+                --------------------------------------------------
+
+                if targetPlaceId == game.PlaceId
+                    and targetJobId == game.JobId then
+
+                    print("Target server detected.")
+                    print("Waiting for target to appear...")
+
+                else
+
+                    --------------------------------------------------
+                    -- 5. TELEPORT
+                    --------------------------------------------------
+
+                    print("Target found in another server.")
+                    print("PlaceId:", targetPlaceId)
+                    print("JobId:", targetJobId)
+                    print("Teleporting...")
+
+                    local success, err = pcall(function()
+                        TeleportService:TeleportToPlaceInstance(
+                            targetPlaceId,
+                            targetJobId,
+                            Players.LocalPlayer
+                        )
+                    end)
+
+                    if not success then
+                        warn("Teleport failed:", err)
+                    end
+                end
+            end
+
+        else
+            --------------------------------------------------
+            -- TARGET OFFLINE / NOT PLAYING
+            --------------------------------------------------
+
+            print("Target is offline or not currently playing.")
+        end
+
+        task.wait(RETRY_DELAY)
+    end
+end
