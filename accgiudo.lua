@@ -2,7 +2,7 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 
-local TARGET_USERNAME = "jjmeatosc666"
+local TARGET_USERNAME = "domdomlaz"
 local RETRY_DELAY = 10
 
 --------------------------------------------------
