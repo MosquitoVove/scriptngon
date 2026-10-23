@@ -1,523 +1,1119 @@
-
--- Harvard Auto Sell — standalone integration
--- Built from the inventory schema and protection rules in mosquitoautosell.txt,
--- with Harvard's reload/plan/sell/verify flow. Review the game-specific payload
--- before enabling: batch selling inside dungeons is not proven by the source files.
+-- Harvard Auto Sell + Item List - standalone
+-- Item catalog is extracted from Harvard's inventoryAutomation component.
+-- No Mosquito Auto Sell code is included. Review and test carefully before use.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
-local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
-while not player do task.wait(); player = Players.LocalPlayer end
-
 local LOBBY_PLACE_ID = 77649408247578
-local POWER_PER_UPGRADE = 10
-local CONFIG_FOLDER = "HarvardAutoSell"
-local CONFIG_FILE = CONFIG_FOLDER .. "/settings-" .. tostring(player.UserId) .. ".json"
-local CONFIG_KEY = "HarvardAutoSellConfig_" .. tostring(player.UserId)
+local CONFIG_FILE = "HarvardAutoSellStandalone_" .. tostring(player.UserId) .. ".json"
 
-local function safeDecode(s)
-    if type(s) ~= "string" then return {} end
-    local ok, value = pcall(function() return HttpService:JSONDecode(s) end)
-    return ok and type(value) == "table" and value or {}
-end
-local function loadConfig()
-    if type(readfile) == "function" then
-        local ok, data = pcall(function() return readfile(CONFIG_FILE) end)
-        if ok then return safeDecode(data) end
-    end
-    return safeDecode(player:GetAttribute(CONFIG_KEY))
-end
-local saved = loadConfig()
-local cfg = {
-    auto = saved.auto == true,
-    scheduleMode = saved.scheduleMode == "maps" and "maps" or "seconds",
-    scheduleValue = math.clamp(tonumber(saved.scheduleValue) or 60, 1, 99999),
-    keepLevel = math.max(0, math.floor(tonumber(saved.keepLevel) or 0)),
-    abilityAmount = math.max(0, math.floor(tonumber(saved.abilityAmount) or 0)),
-    abilityNamesText = type(saved.abilityNamesText) == "string" and saved.abilityNamesText or "",
-    selected = type(saved.selected) == "table" and saved.selected or {},
-    keepRows = type(saved.keepRows) == "table" and saved.keepRows or {},
-    potentialRows = type(saved.potentialRows) == "table" and saved.potentialRows or {},
-    lastPlaceId = tonumber(saved.lastPlaceId),
-    dungeonCount = math.max(0, math.floor(tonumber(saved.dungeonCount) or 0)),
+local rawCatalog = {
+    "Abyssal Skewers|w|n|1|s",
+    "Abyssal Spellscythe|w|n|1|s",
+    "Abyssal Talons|w|n|1|p",
+    "Abyssal Warhammers|w|n|1|p",
+    "Adventurer's Staff|w|n|0|s",
+    "Adventurer's Sword|w|n|0|p",
+    "Agony Orbs|a|e|7|d",
+    "Akuma Guardian Armor|c|n|22|g",
+    "Akuma Guardian Helmet|h|n|22|g",
+    "Akuma Mage Cloak|h|n|22|m",
+    "Akuma Mage Robes|c|n|22|m",
+    "Akuma Warrior Armor|c|n|22|w",
+    "Akuma Warrior Helmet|h|n|22|w",
+    "Akuma's Soulreaver|w|l|22|s",
+    "Akuma's Wraithbringer|w|l|22|p",
+    "Alien Guardian Armor|c|n|12|g",
+    "Alien Guardian Helmet|h|n|12|g",
+    "Alien Mage Armor|c|n|12|m",
+    "Alien Mage Helmet|h|n|12|m",
+    "Alien Warrior Armor|c|n|12|w",
+    "Alien Warrior Helmet|h|n|12|w",
+    "Amethyst Beams|a|e|9|d",
+    "Amethyst Blast|a|e|19|d",
+    "Amethyst Crescent Spellblade|w|n|15|s",
+    "Amethyst Spelldagger|w|n|15|s",
+    "Amethyst Spellscythe|w|n|17|s",
+    "Ancestral Guardian Armor|c|n|15|g",
+    "Ancestral Guardian Helmet|h|n|15|g",
+    "Ancestral Mage Armor|c|n|15|m",
+    "Ancestral Mage Hood|h|n|15|m",
+    "Ancestral Warrior Armor|c|n|15|w",
+    "Ancestral Warrior Helmet|h|n|15|w",
+    "Ancient Elder Staff|w|n|18|s",
+    "Ancient Lava Axe|w|n|19|s",
+    "Ancient Plate Armor|c|n|21|g",
+    "Ancient Plate Helmet|h|n|21|g",
+    "Ancient Ruins Greatsword|w|n|3|p",
+    "Angelic Plate Armor|c|n|13|m",
+    "Angelic Plate Helmet|h|n|13|m",
+    "Angelic Staff|w|n|13|s",
+    "Apothecary Staff|w|n|10|s",
+    "Apprentice Staff|w|n|5|s",
+    "Aquatic Defender|w|n|2|s",
+    "Aquatic Executioner|w|n|2|p",
+    "Aquatic Guardian Armor|c|n|2|g",
+    "Aquatic Guardian Helmet|h|n|2|g",
+    "Aquatic Mage Armor|c|n|2|m",
+    "Aquatic Mage Helmet|h|n|2|m",
+    "Aquatic Scimitars|w|n|2|p",
+    "Aquatic Smite|a|e|2|d",
+    "Aquatic Spear|w|n|2|p",
+    "Aquatic Warrior Armor|c|n|2|w",
+    "Aquatic Warrior Helmet|h|n|2|w",
+    "Arc Blast|a|e|0|d",
+    "Arc Wave|a|e|0|d",
+    "Arcane Amplifier|a|e|1|f",
+    "Arcane Barrage|a|u|20|d",
+    "Arcane Greatstaff|w|n|20|s",
+    "Arcane Orb Staff|w|n|13|s",
+    "Arcane Spray|a|u|4|d",
+    "Arch-Mage_Crown|h|n|10|m",
+    "Arch-Mage_Robes|c|n|10|m",
+    "Arclight Battlestaff|w|n|10|s",
+    "Arrow Barrage|a|e|16|d",
+    "Arrow Rain|a|r|16|d",
+    "Aura of Life|a|u|20|h",
+    "Azerite Greatstaff|w|n|20|s",
+    "Banished Greatsword|w|n|3|p",
+    "Barbaric_Guardian_Armor|c|n|10|g",
+    "Barbaric_Guardian_Helmet|h|n|10|g",
+    "Barbaric_Mage_Crown|h|n|10|m",
+    "Barbaric_Mage_Robes|c|n|10|m",
+    "Barbaric_Warrior_Armor|c|n|10|w",
+    "Barbaric_Warrior_Helmet|h|n|10|w",
+    "Battle Shout|a|u|4|b",
+    "Beast Cleaver|w|n|10|p",
+    "Beastly_Guardian_Armor|c|n|10|g",
+    "Beastly_Guardian_Helmet|h|n|10|g",
+    "Beastly_Warrior_Armor|c|n|10|w",
+    "Beastly_Warrior_Helmet|h|n|10|w",
+    "Beastmaster Spell Scythe|w|l|10|s",
+    "Beastmaster War Scythe|w|l|10|p",
+    "Berserk|a|e|15|d",
+    "Bioforged Cog Spellblade|w|n|3|s",
+    "Bioforged Greataxe|w|n|16|p",
+    "Bioforged Greatsword|w|n|16|p",
+    "Bioforged Quickblade|w|n|3|p",
+    "Bioforged Reinforced Slicer|w|n|16|p",
+    "Blacksteel Greatsword|w|n|18|p",
+    "Blade Barrage|a|e|9|d",
+    "Blade Fall|a|e|19|d",
+    "Blade Revolver|a|e|17|d",
+    "Blade Storm|a|e|17|d",
+    "Blade Throw|a|e|10|d",
+    "Blazing Star|w|n|12|p",
+    "Blessed Lightpost|w|n|3|s",
+    "Blood Pact|a|e|1|g",
+    "Bloodthirster|w|n|17|p",
+    "Blue Fireball|a|c|4|d",
+    "Blue Wizard Hat|h|n|5|m",
+    "Blue Wizard Robes|c|n|5|m",
+    "Bluefire Staff|w|n|20|s",
+    "Bone Scythe|w|n|15|p",
+    "Bronze Dagger|w|n|5|p",
+    "Bronze Longsword|w|n|5|p",
+    "Burned Guardian Armor|c|n|19|g",
+    "Burned Guardian Helmet|h|n|19|g",
+    "Burned Mage Armor|c|n|19|m",
+    "Burned Mage Helmet|h|n|19|m",
+    "Burned Warrior Armor|c|n|19|w",
+    "Burned Warrior Helmet|h|n|19|w",
+    "Captain's Anchor|w|n|8|p",
+    "Carrot Barrage|a|r|6|d",
+    "Celestial Fire Staff|w|n|10|s",
+    "Chain Heal|a|r|10|h",
+    "Chain Lightning|a|e|16|d",
+    "Chain Phase Shock|a|n|14|d",
+    "Chain Storm|a|e|22|d",
+    "Chained Energy Blasts|a|r|16|d",
+    "Champion's Destiny|w|l|0|p",
+    "Champion's Fury|w|l|0|p",
+    "Champion's Judgement|w|l|0|p",
+    "Champion's Oath|w|l|0|p",
+    "Chromatic Rain|a|e|16|d",
+    "Cleansing Beam|a|e|1|",
+    "Coldstone Axes|w|n|20|p",
+    "Coldstone Blades|w|n|20|s",
+    "Coldstone Cleaver|w|n|20|p",
+    "Coldstone Glaive|w|n|20|p",
+    "Coldstone Greatstaff|w|n|20|s",
+    "Coldstone Spellscythe|w|n|20|s",
+    "Coldstone Sword|w|n|20|p",
+    "Commander's Guardian Armor|c|n|12|g",
+    "Commander's Guardian Helmet|h|n|12|g",
+    "Commander's Mage Armor|c|n|12|m",
+    "Commander's Mage Helmet|h|n|12|m",
+    "Commander's Warrior Armor|c|n|12|w",
+    "Commander's Warrior Helmet|h|n|12|w",
+    "Cracked Tooth Cleaver|w|n|8|p",
+    "Crimson Kris|w|n|15|p",
+    "Crimson Spellblade|w|n|20|s",
+    "Crusader Armor|c|n|5|g",
+    "Crusader Helmet|h|n|5|g",
+    "Crystalized Greatsword|w|l|20|p",
+    "Crystalline Cannon|a|e|7|d",
+    "Crystalline Guardian Armor|c|n|7|g",
+    "Crystalline Guardian Helmet|h|n|7|g",
+    "Crystalline Mage Armor|c|n|7|m",
+    "Crystalline Mage Helmet|h|n|7|m",
+    "Crystalline Shard Staff|w|n|7|s",
+    "Crystalline Warrior Armor|c|n|7|w",
+    "Crystalline Warrior Helmet|h|n|7|w",
+    "Cultist Blade|w|n|13|p",
+    "Dark Ice Blades|w|n|17|p",
+    "Dark Priest Staff|w|n|13|s",
+    "Darkstone Greatsword|w|n|19|p",
+    "Daybreak And Gildensong|w|l|9|s",
+    "Demon Lord's Greatstaff|w|n|18|s",
+    "Demonic Curse|a|e|12|d",
+    "Demonic Greatsword|w|n|20|p",
+    "Demonic Spellblade|w|n|20|s",
+    "Demonic Spikes|a|r|18|d",
+    "Demonic Strike|a|r|13|d",
+    "Desert Fury|w|l|5|p",
+    "Desert Mirage|w|l|4|s",
+    "Desert Wrath|w|l|4|p",
+    "Devilish Greataxe|w|n|13|p",
+    "Diamond Encrusted Blade|w|n|20|p",
+    "Dracani Flanged Mace|w|n|9|p",
+    "Dracani Gilded Lance|w|n|9|s",
+    "Dracani Gilded Staff|w|n|9|s",
+    "Dracani Gilded Sword|w|n|9|p",
+    "Dracani Guardian Armor|c|n|9|g",
+    "Dracani Guardian Helmet|h|n|9|g",
+    "Dracani Mage Armor|c|n|9|m",
+    "Dracani Mage Helmet|h|n|9|m",
+    "Dracani Royal Glaive|w|n|9|p",
+    "Dracani Spellclaws|w|n|9|s",
+    "Dracani Warrior Armor|c|n|9|w",
+    "Dracani Warrior Helmet|h|n|9|w",
+    "Dragon Slayer Blade|w|n|20|p",
+    "Dragon's Claw Scythe|w|n|18|s",
+    "Dual Ancient Daggers|w|n|18|p",
+    "Dual Arcane Slicers|w|n|17|s",
+    "Dual Arcane Spelldaggers|w|n|18|s",
+    "Dual Bioforged Drills|w|l|3|p",
+    "Dual Bioforged Spelldaggers|w|n|16|s",
+    "Dual Bladed Mage Daggers|w|n|8|s",
+    "Dual Crimson Daggers|w|n|17|p",
+    "Dual Crystalized Knives|w|n|12|p",
+    "Dual Cutlasses|w|n|10|p",
+    "Dual Elegant Mage Fans|w|n|15|s",
+    "Dual Fist Blades|w|n|19|p",
+    "Dual Flatblade Slicers|w|n|18|p",
+    "Dual Frozen Blades|w|n|10|p",
+    "Dual Fusion Blades|w|n|16|p",
+    "Dual Godforged Blades|w|l|3|p",
+    "Dual Hellfire Blades|w|n|19|s",
+    "Dual Hextech Spelldaggers|w|n|16|s",
+    "Dual Infernal Daggers|w|n|15|p",
+    "Dual Infernal Scimitars|w|n|17|p",
+    "Dual Inferno Slicers|w|n|10|p",
+    "Dual Jade Daggers|w|n|10|p",
+    "Dual Magma Fangs|w|n|17|p",
+    "Dual Magma Shields|w|n|19|s",
+    "Dual Nature Vines|w|n|3|s",
+    "Dual Ocean Fists|w|n|8|s",
+    "Dual Phantom Axes|w|n|8|p",
+    "Dual Phantom Daggers|w|n|8|p",
+    "Dual Phantom Defenders|w|n|8|s",
+    "Dual Phoenix Daggers|w|l|18|p",
+    "Dual Pirate Cutlasses|w|n|8|p",
+    "Dual Razor Slicers|w|n|17|p",
+    "Dual Royal Axes|w|n|10|p",
+    "Dual Samurai Sickles|w|n|15|p",
+    "Dual Samurai Stars|w|n|15|p",
+    "Dual Sapphire Slicers|w|n|18|p",
+    "Dual Serrated Knives|w|n|8|p",
+    "Dual Sinister Blades|w|n|3|p",
+    "Dual Solar Blades|w|n|12|p",
+    "Dual Toxic Daggers|w|n|8|s",
+    "Eagle Staff|w|n|10|s",
+    "Earth Clap|a|r|15|d",
+    "Earth Kick|a|u|17|d",
+    "Earth Maul|w|n|3|p",
+    "Earth Spikes|a|u|8|d",
+    "Earth Staff|w|n|3|s",
+    "Earth Wand|w|n|13|s",
+    "Easter Guardian Armor|c|e|6|g",
+    "Easter Guardian Helmet|h|e|6|g",
+    "Easter Mage Armor|c|e|6|m",
+    "Easter Mage Helmet|h|e|6|m",
+    "Easter Warrior Armor|c|e|6|w",
+    "Easter Warrior Helmet|h|e|6|w",
+    "Egg Bomb|a|r|6|d",
+    "Egg Maul|w|e|6|p",
+    "Egg Staff|w|e|6|s",
+    "Eldenbark Greatstaff|w|l|7|s",
+    "Eldenbark Greatsword|w|l|7|p",
+    "Eldenbark Guardian Armor|c|n|7|g",
+    "Eldenbark Guardian Helmet|h|n|7|g",
+    "Eldenbark Mage Armor|c|n|7|m",
+    "Eldenbark Mage Helmet|h|n|7|m",
+    "Eldenbark Warrior Armor|c|n|7|w",
+    "Eldenbark Warrior Helmet|h|n|7|w",
+    "Elder Void Wand|w|n|20|s",
+    "Eldritch Cleavers|w|n|1|p",
+    "Eldritch Guardian Armor|c|n|1|g",
+    "Eldritch Guardian Helmet|h|n|1|g",
+    "Eldritch Mace|w|n|1|s",
+    "Eldritch Mage Armor|c|n|1|m",
+    "Eldritch Mage Helmet|h|n|1|m",
+    "Eldritch Trident|w|n|1|s",
+    "Eldritch War Lance|w|n|1|p",
+    "Eldritch Warrior Armor|c|n|1|w",
+    "Eldritch Warrior Helmet|h|n|1|w",
+    "Electric Boom|a|e|10|d",
+    "Electric Field|a|e|12|d",
+    "Electric Grinder|a|e|12|d",
+    "Electric Slash|a|r|17|d",
+    "Electron Spell Dagger|w|n|12|s",
+    "Elementalist Hood|h|n|5|m",
+    "Elementalist Robes|c|n|5|m",
+    "Elementalist Staff|w|n|17|s",
+    "Elite Ancient Plate Armor|c|n|21|g",
+    "Elite Ancient Plate Helmet|h|n|21|g",
+    "Elite Mage Plate Armor|c|n|21|m",
+    "Elite Mage Plate Helmet|h|n|21|m",
+    "Elite Warlord Plate Armor|c|n|21|w",
+    "Elite Warlord Plate Helmet|h|n|21|w",
+    "Elven Staff|w|n|10|s",
+    "Empowered Crystal Blade|w|n|13|p",
+    "Enchanted Demonic Greataxe|w|n|18|p",
+    "Enchanted Sea Axes|w|n|2|s",
+    "Enchanted Sea Daggers|w|n|2|s",
+    "Enchanted Serpent Daggers|w|n|2|s",
+    "Enchanted Shard Dual Blade|w|n|7|p",
+    "Enchanted Shard Spelldagger|w|n|7|s",
+    "Enchanted Shard Staff|w|n|7|s",
+    "Enchanted Shard War Axe|w|n|7|p",
+    "Enchanted Shuriken|a|e|15|d",
+    "Enchanted Spinning Blades|a|e|13|d",
+    "Enchanted Sword|w|n|5|p",
+    "Energized Spell Dagger|w|n|12|s",
+    "Energy Orb|a|e|12|d",
+    "Enhanced Inner Focus|a|l|2|b",
+    "Enhanced Inner Rage|a|l|2|b",
+    "Ethereal Greataxe|w|n|10|p",
+    "Explosive Mine|a|e|12|d",
+    "Explosive Punch|a|e|16|d",
+    "Fallen Guardian Armor|c|n|1|g",
+    "Fallen Guardian Helmet|h|n|1|g",
+    "Fallen Mage Armor|c|n|1|m",
+    "Fallen Mage Helmet|h|n|1|m",
+    "Fallen Warrior Armor|c|n|1|w",
+    "Fallen Warrior Helmet|h|n|1|w",
+    "Fallen's Battlestaff|w|n|1|s",
+    "Fallen's Blade|w|n|1|p",
+    "Fallen's Halberd|w|n|1|p",
+    "Fallen's Spellblades|w|n|1|s",
+    "File:Fungal Guardian Armor|c|n|7|g",
+    "Fire and Ice Staff|w|n|10|s",
+    "Fire Bomb|a|u|20|d",
+    "Fireball|a|c|4|d",
+    "Flame Cyclone|a|e|15|d",
+    "Flame Shuriken|a|e|11|d",
+    "Flame Staff|w|n|5|s",
+    "Flame Step|a|c|0|d",
+    "Flame Strike|a|r|11|d",
+    "Focus Beam|a|e|12|d",
+    "Forest Vine Hatchet|w|n|7|p",
+    "Forest Vine Spellblade|w|n|7|s",
+    "Forgotten Army|a|e|17|d",
+    "Forgotten Guardian Armor|c|n|21|g",
+    "Forgotten Guardian Helmet|h|n|21|g",
+    "Forgotten Mage Hood|h|n|21|m",
+    "Forgotten Mage Robes|c|n|21|m",
+    "Forgotten Warrior Armor|c|n|21|w",
+    "Forgotten Warrior Helmet|h|n|21|w",
+    "Frost Cone|a|r|11|d",
+    "Frost Giant Greataxe|w|n|11|p",
+    "Frost Maul|w|n|20|p",
+    "Frostbound Guardian Armor|c|n|20|g",
+    "Frostbound Guardian Helmet|h|n|20|g",
+    "Frostbound Mage Cloak|h|n|20|m",
+    "Frostbound Mage Robes|c|n|20|m",
+    "Frostbound Warrior Armor|c|n|20|w",
+    "Frostbound Warrior Helmet|h|n|20|w",
+    "Frostshard Battle Axe|w|n|20|p",
+    "Frostshard Greatstaff|w|n|20|s",
+    "Frostshard Hammer|w|n|20|p",
+    "Frostshard Lance|w|n|20|s",
+    "Frostshard Trident|w|n|20|s",
+    "Frostshard Twinblades|w|n|20|p",
+    "Frostwarden|w|l|20|s",
+    "Frosty Staff|w|n|20|s",
+    "Frozen Greatsword|w|n|20|p",
+    "Frozen Lord's Greatsword|w|n|20|p",
+    "Frozen Spelldaggers|w|n|20|s",
+    "Fungal Guardian Helmet|h|n|7|g",
+    "Fungal Lance|w|n|7|p",
+    "Fungal Mage Armor|c|n|7|m",
+    "Fungal Mage Helmet|h|n|7|m",
+    "Fungal Pike|w|n|7|s",
+    "Fungal Poison|a|r|7|d",
+    "Fungal Staff|w|n|7|s",
+    "Fungal Warhammer|w|n|7|p",
+    "Fungal Warrior Armor|c|n|7|w",
+    "Fungal Warrior Helmet|h|n|7|w",
+    "Fusion Greatsword|w|n|16|p",
+    "Fusion Magic Keyblade|w|n|3|s",
+    "Galactic Dual Blades|w|l|12|p",
+    "Galactic Pike|w|l|12|s",
+    "Gale Barrage|a|e|11|d",
+    "Gale Slice|a|u|20|d",
+    "Geyser|a|e|11|d",
+    "Ghostly Cannon Barrage|a|u|13|d",
+    "Ghostly Greataxe|w|n|5|p",
+    "Ghostly Rampage|a|r|15|d",
+    "Ghoul Slayer|w|n|5|p",
+    "Giant Royal Axe|w|n|17|p",
+    "Gildenscale Guardian Armor|c|n|9|g",
+    "Gildenscale Guardian Helmet|h|n|9|g",
+    "Gildenscale Mage Armor|c|n|9|m",
+    "Gildenscale Mage Helmet|h|n|9|m",
+    "Gildenscale Oath And Aegis|w|l|9|p",
+    "Gildenscale Warrior Armor|c|n|9|w",
+    "Gildenscale Warrior Helmet|h|n|9|w",
+    "Glacial Blows|a|r|10|d",
+    "Glacial Greatsword|w|n|20|p",
+    "Glorious Guardian Armor|c|n|18|g",
+    "Glorious Guardian Helmet|h|n|18|g",
+    "Glorious Mage Armor|c|n|18|m",
+    "Glorious Mage Helmet|h|n|18|m",
+    "Glorious Warrior Armor|c|n|18|w",
+    "Glorious Warrior Helmet|h|n|18|w",
+    "Goblin Cleaver|w|n|10|p",
+    "God Spear|a|e|9|d",
+    "Godforged Greatstaff|w|l|3|s",
+    "Godly Guardian Armor|c|n|13|g",
+    "Godly Guardian Helmet|h|n|13|g",
+    "Godly Mage Helmet|h|n|13|m",
+    "Godly Mage Robes|c|n|13|m",
+    "Godly Warrior Armor|c|n|13|w",
+    "Godly Warrior Helmet|h|n|13|w",
+    "Godsword|w|n|20|p",
+    "Golden Kopesh|w|n|4|p",
+    "Grand Claymore|w|n|5|p",
+    "Granite Maul|w|n|5|p",
+    "Gravity Leap|a|l|1|",
+    "Greater Dark Scythe|w|n|13|s",
+    "Greater Prophet Staff|w|n|13|s",
+    "Ground Slam|a|u|20|d",
+    "Ground Stomp|a|e|16|d",
+    "Guardian Armor|c|n|5|g",
+    "Guardian Call|a|e|13|g",
+    "Guardian Helmet|h|n|5|g",
+    "Guardian Roar|a|r|6|g",
+    "Guardian's Blessing|a|r|10|g",
+    "Gungnir|w|l|11|s",
+    "Hand Cannon|a|u|15|d",
+    "Hands Of Death|a|e|22|d",
+    "Hardened Ice Sword|w|n|20|p",
+    "Heavenly Greatsword|w|n|10|p",
+    "Heavenly Guardian Armor|c|n|3|g",
+    "Heavenly Guardian Helmet|h|n|3|g",
+    "Heavenly Mage Armor|c|n|3|m",
+    "Heavenly Mage Helmet|h|n|3|m",
+    "Heavenly Warrior Armor|c|n|3|w",
+    "Heavenly Warrior Helmet|h|n|3|w",
+    "Hellstone Greataxe|w|n|19|p",
+    "Hextech Greataxe|w|n|16|p",
+    "Hextech Katana|w|n|16|p",
+    "Hextech Overloaded Staff|w|l|3|s",
+    "Hextech Polearm|w|n|16|s",
+    "Hextech Wired Spellblade|w|n|16|s",
+    "High Priest Battleaxe|w|n|10|p",
+    "Hofund|w|x|11|p",
+    "Holy Barrier|a|r|4|g",
+    "Holy Circle|a|e|4|h",
+    "Holy Grail|w|n|20|s",
+    "Holy Staff|w|n|5|s",
+    "Holy Sun Staff|w|n|4|s",
+    "Holy Wand|w|n|13|s",
+    "Honorable Greatsword|w|n|15|p",
+    "Hope's Triumph|w|n|18|s",
+    "Hunter's Guardian Armor|c|n|8|g",
+    "Hunter's Guardian Helmet|h|n|8|g",
+    "Hunter's Mage Armor|c|n|8|m",
+    "Hunter's Mage Helmet|h|n|8|m",
+    "Hunter's Warrior Armor|c|n|8|w",
+    "Hunter's Warrior Helmet|h|n|8|w",
+    "Ice Barrage|a|e|2|d",
+    "Ice Crash|a|e|2|d",
+    "Ice Enhanced Sword|w|n|20|p",
+    "Ice Greatspear|w|n|11|p",
+    "Ice Guardian Armor|c|n|21|g",
+    "Ice Guardian Helmet|h|n|21|g",
+    "Ice Infused Slicer|w|n|20|p",
+    "Ice King's Guardian Armor|c|n|21|g",
+    "Ice King's Guardian Helmet|h|n|21|g",
+    "Ice King's Mage Hood|h|n|21|m",
+    "Ice King's Mage Robes|c|n|21|m",
+    "Ice King's Warrior Armor|c|n|21|w",
+    "Ice King's Warrior Helmet|h|n|21|w",
+    "Ice Mage Hood|h|n|21|m",
+    "Ice Mage Robes|c|n|21|m",
+    "Ice Needles|a|u|20|d",
+    "Ice Nova|a|r|18|d",
+    "Ice Queen's Wand|w|n|20|s",
+    "Ice Reaver|w|n|20|s",
+    "Ice Sickles|w|n|20|p",
+    "Ice Spellblade|w|n|11|s",
+    "Ice Spikes|a|e|2|d",
+    "Ice Totem|a|e|18|d",
+    "Ice Wand|w|n|20|s",
+    "Ice Warrior Armor|c|n|21|w",
+    "Ice Warrior Helmet|h|n|21|w",
+    "Iceblade|w|n|20|p",
+    "Icicle Barrage|a|r|17|d",
+    "Illusion Blast|a|e|15|d",
+    "Industrial Guardian Armor|c|n|16|g",
+    "Industrial Guardian Helmet|h|n|16|g",
+    "Industrial Mage Armor|c|n|16|m",
+    "Industrial Mage Helmet|h|n|16|m",
+    "Industrial Spellscythe|w|n|15|s",
+    "Industrial Warrior Armor|c|n|16|w",
+    "Industrial Warrior Helmet|h|n|16|w",
+    "Infernal Blast|a|e|16|d",
+    "Infernal Elemental Sword|w|n|20|p",
+    "Infernal Guardian Armor|c|n|15|g",
+    "Infernal Guardian Helmet|h|n|15|g",
+    "Infernal Mage Hood|h|n|15|m",
+    "Infernal Mage Robes|c|n|15|m",
+    "Infernal Orbs|a|u|18|d",
+    "Infernal Strike|a|e|18|d",
+    "Infernal Sun Staff|w|n|10|s",
+    "Infernal Warrior Armor|c|n|15|w",
+    "Infernal Warrior Helmet|h|n|15|w",
+    "Inferno Plate Armor|c|n|13|w",
+    "Inferno Plate Helmet|h|n|13|w",
+    "Inner Focus|a|e|19|b",
+    "Inner Rage|a|e|19|b",
+    "Innervate|a|e|4|b",
+    "Inventor's Greatsword|w|l|16|p",
+    "Inventor's Guardian Armor|c|n|3|g",
+    "Inventor's Guardian Helmet|h|n|3|g",
+    "Inventor's Mage Armor|c|n|3|m",
+    "Inventor's Mage Helmet|h|n|3|m",
+    "Inventor's Spellblade|w|l|16|s",
+    "Inventor's Warrior Armor|c|n|3|w",
+    "Inventor's Warrior Helmet|h|n|3|w",
+    "Iron Armor|c|n|5|g",
+    "Iron Helmet|h|n|5|g",
+    "Iron Longsword|w|n|5|p",
+    "Jade Rain|a|e|9|d",
+    "Jade Roller|a|e|9|d",
+    "Jade Spelldagger|w|n|15|s",
+    "Jigoku Club And Shield|w|n|22|p",
+    "Jigoku Shuriblade|w|n|22|s",
+    "Jigoku Twin Katanas|w|n|22|p",
+    "Jigoku Twin Warfans|w|n|22|s",
+    "Jotunn Guardian Armor|c|n|11|g",
+    "Jotunn Guardian Helmet|h|n|11|g",
+    "Jotunn Mage Armor|c|n|11|m",
+    "Jotunn Mage Helmet|h|n|11|m",
+    "Jotunn Warrior Armor|c|n|11|w",
+    "Jotunn Warrior Helmet|h|n|11|w",
+    "King's Greatsword|w|n|20|p",
+    "King's Spellblade|w|n|20|s",
+    "Kraken Slayer|w|l|8|p",
+    "Kunai Knives|a|e|22|d",
+    "Laevateinn|w|x|11|s",
+    "Lava Barrage|a|e|19|d",
+    "Lava Beam Orb|a|e|19|d",
+    "Lava Cage|a|e|19|d",
+    "Lava King's Guardian Armor|c|n|19|g",
+    "Lava King's Guardian Helmet|h|n|19|g",
+    "Lava King's Mage Armor|c|n|19|m",
+    "Lava King's Mage Helmet|h|n|19|m",
+    "Lava King's Spell Daggers|w|l|19|s",
+    "Lava King's Warrior Armor|c|n|19|w",
+    "Lava King's Warrior Helmet|h|n|19|w",
+    "Lava King's Warscythe|w|l|19|p",
+    "Lava Lash|a|e|15|d",
+    "Lava Shard Staff|w|n|19|s",
+    "Lava Spellblade|w|n|19|s",
+    "Lava Tendril Pike|w|n|19|s",
+    "Leaping Strike|a|c|0|d",
+    "Life Dash|a|r|16|h",
+    "Life Pulse|a|r|6|h",
+    "Lightning Beam|a|u|20|d",
+    "Lightning Burst|a|e|7|d",
+    "Lightning Strikes|a|r|4|d",
+    "Luminous Greatstaff|w|n|18|s",
+    "Mage Plate Armor|c|n|21|m",
+    "Mage Plate Helmet|h|n|21|m",
+    "Mage's Spellbook|w|n|5|s",
+    "Magic Mallet|w|n|5|s",
+    "Magic Trident|w|n|8|s",
+    "Magma Infused Staff|w|n|20|s",
+    "Magma Infused Waraxe|w|n|19|p",
+    "Mana Infused Spellblade|w|n|17|s",
+    "Mercenary Armor|c|n|5|w",
+    "Mercenary Helmet|h|n|5|w",
+    "Midgardian Guardian Armor|c|n|11|g",
+    "Midgardian Guardian Helmet|h|n|11|g",
+    "Midgardian Mage Armor|c|n|11|m",
+    "Midgardian Mage Helmet|h|n|11|m",
+    "Midgardian Warrior Armor|c|n|11|w",
+    "Midgardian Warrior Helmet|h|n|11|w",
+    "Mighty Cleave|a|e|1|",
+    "Mighty Flatblade|w|n|13|p",
+    "Mighty Frozen Greatsword|w|n|20|p",
+    "Mighty Fusion Maul|w|n|16|p",
+    "Mighty Fusion Spellblade|w|n|16|s",
+    "Mighty Leap|a|r|8|d",
+    "Mjolnir|w|l|11|p",
+    "Molten Ball|a|e|12|d",
+    "Molten Blade|w|n|13|p",
+    "Molten Forged Guardian Armor|c|n|19|g",
+    "Molten Forged Guardian Helmet|h|n|19|g",
+    "Molten Forged Mage Armor|c|n|19|m",
+    "Molten Forged Mage Helmet|h|n|19|m",
+    "Molten Forged Warrior Armor|c|n|19|w",
+    "Molten Forged Warrior Helmet|h|n|19|w",
+    "Molten Greataxe|w|n|13|p",
+    "Molten Maul|w|n|0|p",
+    "Molten Shards|a|e|19|d",
+    "Moon Crystal Spell Blade|w|n|12|s",
+    "Moonlight Staff|w|n|10|s",
+    "Mossy Greatsword|w|n|20|p",
+    "Mystery Matter|a|e|12|d",
+    "Mythical Guardian Armor|c|n|8|g",
+    "Mythical Guardian Helmet|h|n|8|g",
+    "Mythical Mage Armor|c|n|8|m",
+    "Mythical Mage Helmet|h|n|8|m",
+    "Mythical Warrior Armor|c|n|8|w",
+    "Mythical Warrior Helmet|h|n|8|w",
+    "Nature Guardian Armor|c|n|3|g",
+    "Nature Guardian Helmet|h|n|3|g",
+    "Nature Mage Armor|c|n|3|m",
+    "Nature Mage Helmet|h|n|3|m",
+    "Nature Scythe|w|n|18|p",
+    "Nature Spellblade|w|n|3|s",
+    "Nature Warrior Armor|c|n|3|w",
+    "Nature Warrior Helmet|h|n|3|w",
+    "Norse Blade|w|n|11|p",
+    "Norse Greataxe|w|n|11|p",
+    "Northern Runic Blade|w|n|11|p",
+    "Northern Spellstaff|w|n|11|s",
+    "Novice Armor|c|n|5|w",
+    "Novice Helmet|h|n|5|w",
+    "Novice Wand|w|n|5|s",
+    "Oathsworn Guardian Armor|c|n|9|g",
+    "Oathsworn Guardian Helmet|h|n|9|g",
+    "Oathsworn Halberd|w|n|9|p",
+    "Oathsworn Hammer|w|n|9|p",
+    "Oathsworn Mage Armor|c|n|9|m",
+    "Oathsworn Mage Helmet|h|n|9|m",
+    "Oathsworn Spellblade|w|n|9|s",
+    "Oathsworn Spellscythe|w|n|9|s",
+    "Oathsworn Staff And Tome|w|n|9|s",
+    "Oathsworn Sword And Shield|w|n|9|p",
+    "Oathsworn Warrior Armor|c|n|9|w",
+    "Oathsworn Warrior Helmet|h|n|9|w",
+    "Ocean Dweller's Mageblade|w|n|8|s",
+    "Ocean Pearl Staff|w|n|2|s",
+    "Ocean Splitter|w|n|13|p",
+    "Oceanic Greatsword|w|n|2|p",
+    "Oni Guardian Armor|c|n|22|g",
+    "Oni Guardian Helmet|h|n|22|g",
+    "Oni Mage Cloak|h|n|22|m",
+    "Oni Mage Robes|c|n|22|m",
+    "Oni Warrior Armor|c|n|22|w",
+    "Oni Warrior Helmet|h|n|22|w",
+    "Oni's Bell Staff|w|n|22|s",
+    "Oni's Dadao|w|n|22|p",
+    "Oni's Kanabo|w|n|22|p",
+    "Oni's Naginata|w|n|22|s",
+    "Onyx Empowered Greatsword|w|n|13|p",
+    "Onyx Hammer|w|n|20|p",
+    "Onyx Spell Scythe|w|n|20|s",
+    "Onyx Staff|w|n|5|s",
+    "Oracle's Ascendance|w|l|0|s",
+    "Oracle's Gaze|w|l|0|s",
+    "Oracle's Revelation|w|l|0|s",
+    "Oracle's Wisdom|w|l|0|s",
+    "Orb Of Destruction|a|e|16|d",
+    "Overcharge|a|r|16|d",
+    "Overgrown War Scythe|w|n|7|p",
+    "Overlord's Guardian Armor|c|n|17|g",
+    "Overlord's Guardian Hat|h|n|17|g",
+    "Overlord's Mage Hat|h|n|17|m",
+    "Overlord's Mage Robes|c|n|17|m",
+    "Overlord's Manablade|w|l|17|s",
+    "Overlord's Rageblade|w|l|17|p",
+    "Overlord's Warrior Armor|c|n|17|w",
+    "Overlord's Warrior Hat|h|n|17|w",
+    "Phantom Blades|a|e|8|d",
+    "Phantom Flames|a|e|13|d",
+    "Phantom Striker|a|e|8|d",
+    "Phase Barrage|a|n|14|d",
+    "Phoenix Greatstaff|w|l|18|s",
+    "Piercing Rain|a|u|20|d",
+    "Piercing Roots|a|r|7|d",
+    "Pink Pearl Spellscythe|w|n|15|s",
+    "Pirate King's Guardian Armor|c|n|13|g",
+    "Pirate King's Guardian Helmet|h|n|13|g",
+    "Pirate King's Mage Halo|h|n|13|m",
+    "Pirate King's Mage Robes|c|n|13|m",
+    "Pirate King's Warrior Armor|c|n|13|w",
+    "Pirate King's Warrior Helmet|h|n|13|w",
+    "Plasma Infused Cutlass|w|n|16|s",
+    "Plasma Spellblade|w|n|16|s",
+    "Plasma Twin Spellblade|w|n|16|s",
+    "Poison Cloud|a|r|4|d",
+    "Poison Spear|w|n|8|s",
+    "Pulse Beam|a|r|8|d",
+    "Pulse Waves|a|r|16|d",
+    "Pulsefire|a|r|13|d",
+    "Pulverizer|w|n|5|p",
+    "Raider's Guardian Armor|c|n|8|g",
+    "Raider's Guardian Helmet|h|n|8|g",
+    "Raider's Mage Armor|c|n|8|m",
+    "Raider's Mage Helmet|h|n|8|m",
+    "Raider's Warrior Armor|c|n|8|w",
+    "Raider's Warrior Helmet|h|n|8|w",
+    "Red Knight Armor|c|n|5|w",
+    "Red Knight Helmet|h|n|5|w",
+    "Redemption|a|u|4|h",
+    "Reinforced Guardian Armor|c|n|18|g",
+    "Reinforced Guardian Helmet|h|n|18|g",
+    "Reinforced Ice Blade|w|n|20|p",
+    "Reinforced Steel Sword|w|n|20|p",
+    "Rejuvenating Spray|a|u|20|h",
+    "Rending Slice|a|r|18|d",
+    "Revitalize|a|e|7|h",
+    "Rift Beam|a|e|22|d",
+    "Riptide Guardian Armor|c|n|2|g",
+    "Riptide Guardian Helmet|h|n|2|g",
+    "Riptide Mage Armor|c|n|2|m",
+    "Riptide Mage Helmet|h|n|2|m",
+    "Riptide Warrior Armor|c|n|2|w",
+    "Riptide Warrior Helmet|h|n|2|w",
+    "Rogue Guardian Armor|c|n|17|g",
+    "Rogue Guardian Hood|h|n|17|g",
+    "Rogue Mage Hood|h|n|17|m",
+    "Rogue Mage Robes|c|n|17|m",
+    "Rogue Warrior Armor|c|n|17|w",
+    "Rogue Warrior Hood|h|n|17|w",
+    "Rogue's Rapier|w|n|5|p",
+    "Royal Crimson Greatsword|w|n|18|p",
+    "Royal Katana|w|n|15|p",
+    "Royal Slicer|w|n|20|p",
+    "Ruby Greatsword|w|n|15|p",
+    "Ruby Staff|w|n|13|s",
+    "Runic Hammer|w|n|20|p",
+    "Runic Mace|w|n|11|s",
+    "Runic Pike|w|n|17|s",
+    "Runic Spellscythe|w|n|17|s",
+    "Runic Strike|a|u|17|d",
+    "Sacrificial Orbs|a|e|1|",
+    "Sakura Greatstaff|w|l|15|s",
+    "Sakura Katana|w|l|15|p",
+    "Salvaged Guardian Armor|c|n|17|g",
+    "Salvaged Guardian Helmet|h|n|17|g",
+    "Salvaged Mage Hat|h|n|17|m",
+    "Salvaged Mage Robes|c|n|17|m",
+    "Salvaged Warrior Armor|c|n|17|w",
+    "Salvaged Warrior Helmet|h|n|17|w",
+    "Samurai Guardian Armor|c|n|15|g",
+    "Samurai Guardian Helmet|h|n|15|g",
+    "Samurai Mage Helmet|h|n|15|m",
+    "Samurai Mage Robes|c|n|15|m",
+    "Samurai Warrior Armor|c|n|15|w",
+    "Samurai Warrior Hairband|h|n|15|w",
+    "Sandstone Guardian Armor|c|n|4|g",
+    "Sandstone Guardian Helmet|h|n|4|g",
+    "Sandstone Mage Cloak|h|n|4|m",
+    "Sandstone Mage Robes|c|n|4|m",
+    "Sandstone Warrior Armor|c|n|4|w",
+    "Sandstone Warrior Helmet|h|n|4|w",
+    "Sapphire Greatstaff|w|n|18|s",
+    "Sapphire Spell Dagger|w|n|20|s",
+    "Sapphire Spellspear|w|n|15|s",
+    "Sapphire Stone Wand|w|n|17|s",
+    "Sea King's Greatstaff|w|l|2|s",
+    "Sea King's Trident|w|l|2|p",
+    "Sea Serpent's Wings|w|l|8|s",
+    "Sea Staff|w|n|2|s",
+    "Seafarer's Lost Blade|w|n|8|p",
+    "Seafarer's Magic Device|w|n|8|s",
+    "Searing Beam|a|u|20|d",
+    "Seishin Cleaver|w|n|22|p",
+    "Seishin Club|w|n|22|s",
+    "Seishin Crescent|w|n|22|p",
+    "Seishin Guardian Armor|c|n|22|g",
+    "Seishin Guardian Helmet|h|n|22|g",
+    "Seishin Mage Cloak|h|n|22|m",
+    "Seishin Mage Robes|c|n|22|m",
+    "Seishin Staff|w|n|22|s",
+    "Seishin Warrior Armor|c|n|22|w",
+    "Seishin Warrior Helmet|h|n|22|w",
+    "Serpent Pike|w|n|2|p",
+    "Serpent Scimitars|w|n|2|p",
+    "Sharktooth Blade|w|n|8|p",
+    "Shattered Magma Blade|w|n|19|p",
+    "Shatterstrike|a|e|1|",
+    "Shock Blast|a|r|0|d",
+    "Shock Wave|a|r|0|d",
+    "Skull Flames|a|e|13|d",
+    "Slam|a|u|4|d",
+    "Smite|a|r|8|d",
+    "Snow Elemental Staff|w|n|20|s",
+    "Snowy Greatstaff|w|n|20|s",
+    "Solar Beam|a|e|9|d",
+    "Solar Essence Staff|w|n|12|s",
+    "Solar Greatsword|w|n|12|p",
+    "Solar Katana|w|n|12|p",
+    "Solar Staff|w|n|13|s",
+    "Soul Drain|a|e|11|d",
+    "Soulstealer Greatsword|w|l|13|p",
+    "Space Guardian Armor|c|n|12|g",
+    "Space Guardian Helmet|h|n|12|g",
+    "Space Mage Armor|c|n|12|m",
+    "Space Mage Helmet|h|n|12|m",
+    "Space Warrior Armor|c|n|12|w",
+    "Space Warrior Helmet|h|n|12|w",
+    "Spear Strike|a|r|2|d",
+    "Spiked Club|w|n|5|p",
+    "Spinning Blade Smash|a|e|22|d",
+    "Spirit Bomb|a|u|8|d",
+    "Spirit Link|a|e|22|h",
+    "Staff of Heat|w|n|15|s",
+    "Staff of the Gods|w|l|13|s",
+    "Staff of the North|w|n|11|s",
+    "Star Barrage|a|r|16|d",
+    "Starfall|a|r|16|d",
+    "Starter Wand|w|c|0|s",
+    "Steel Serrated Sword|w|n|5|p",
+    "Steel Strongsword|w|n|20|p",
+    "Stone Scythe|w|n|17|p",
+    "Stone Strongsword|w|n|13|p",
+    "Storm Blast|a|e|0|d",
+    "Storm Wave|a|e|0|d",
+    "Sunken Blade|w|n|3|p",
+    "Sunlight Staff|w|n|10|s",
+    "Taunt|a|c|5|g",
+    "Taunting Aura|a|u|20|g",
+    "Templar Blade|w|n|13|p",
+    "Templar Hood|h|n|5|m",
+    "Templar Robes|c|n|5|m",
+    "Thunderous Blast|a|u|10|d",
+    "Timelost Greatsword|w|n|18|p",
+    "Timelost Guardian Armor|c|n|18|g",
+    "Timelost Guardian Helmet|h|n|18|g",
+    "Timelost Mage Armor|c|n|18|m",
+    "Timelost Mage Helmet|h|n|18|m",
+    "Timelost Spellbook|w|n|18|s",
+    "Timelost Warhammer|w|n|18|p",
+    "Timelost Warrior Armor|c|n|18|w",
+    "Timelost Warrior Helmet|h|n|18|w",
+    "Titan's Greataxe|w|n|13|p",
+    "Titan-forged_Guardian_Armor|c|n|10|g",
+    "Titan-forged_Guardian_Helmet|h|n|10|g",
+    "Titan-forged_Mage_Armor|c|n|10|m",
+    "Titan-forged_Mage_Helmet|h|n|10|m",
+    "Titan-forged_Warrior_Armor|c|n|10|w",
+    "Titan-forged_Warrior_Helmet|h|n|10|w",
+    "Titanium Guardian Armor|c|n|16|g",
+    "Titanium Guardian Helmet|h|n|16|g",
+    "Titanium Mage Armor|c|n|16|m",
+    "Titanium Mage Helmet|h|n|16|m",
+    "Titanium Warrior Armor|c|n|16|w",
+    "Titanium Warrior Helmet|h|n|16|w",
+    "Toxic Spellscythe|w|n|17|s",
+    "Toxic Warspear|w|n|15|p",
+    "Tribal Mage Armor|c|n|18|m",
+    "Tribal Mage Hood|h|n|18|m",
+    "Tribal Staff|w|n|10|s",
+    "Tribal Warrior Helmet|h|n|18|w",
+    "Tribal_Warrior_Armor|c|n|18|w",
+    "Triple Blade Throw|a|e|16|d",
+    "Triple Quake|a|e|22|d",
+    "Triton Guardian Armor|c|n|2|g",
+    "Triton Guardian Helmet|h|n|2|g",
+    "Triton Mage Armor|c|n|2|m",
+    "Triton Mage Helmet|h|n|2|m",
+    "Triton Warrior Armor|c|n|2|w",
+    "Triton Warrior Helmet|h|n|2|w",
+    "Tsunami|a|u|17|d",
+    "Tundra Guardian Armor|c|n|20|g",
+    "Tundra Guardian Helmet|h|n|20|g",
+    "Tundra Mage Cloak|h|n|20|m",
+    "Tundra Mage Robes|c|n|20|m",
+    "Tundra Warrior Armor|c|n|20|w",
+    "Tundra Warrior Helmet|h|n|20|w",
+    "Twin Bladed Slicer|w|n|20|p",
+    "Twin Slash|a|e|12|d",
+    "Twisted Wood Greatstaff|w|l|3|s",
+    "Twisted Wood Greatsword|w|l|3|p",
+    "Universal Heal|a|e|13|h",
+    "Unstable Warp|a|l|1|",
+    "Valhalla Guardian Armor|c|n|11|g",
+    "Valhalla Guardian Helmet|h|n|11|g",
+    "Valhalla Mage Armor|c|n|11|m",
+    "Valhalla Mage Helmet|h|n|11|m",
+    "Valhalla Warrior Armor|c|n|11|w",
+    "Valhalla Warrior Helmet|h|n|11|w",
+    "Vampiric Greatstaff|w|n|18|s",
+    "Vengeful Taunt|a|e|1|",
+    "Viking Hatchets|w|n|11|p",
+    "Viking Sceptre|w|n|11|s",
+    "Viking Shield|w|n|11|s",
+    "Violet Spellblade|w|n|15|s",
+    "Void Beam|a|r|10|d",
+    "Void Dragon|a|e|22|d",
+    "Void Greatsword|w|n|12|p",
+    "Void Plate Armor|c|n|13|g",
+    "Void Plate Helmet|h|n|13|g",
+    "Void Spell Blade|w|n|12|s",
+    "Void Spell Dagger|w|n|12|s",
+    "Void Spheres|a|r|8|d",
+    "Voidborn Guardian Armor|c|n|1|g",
+    "Voidborn Guardian Helmet|h|n|1|g",
+    "Voidborn Mage Armor|c|n|1|m",
+    "Voidborn Mage Helmet|h|n|1|m",
+    "Voidborn Warrior Armor|c|n|1|w",
+    "Voidborn Warrior Helmet|h|n|1|w",
+    "Voidborn's Embrace|w|l|1|s",
+    "Voidborn's Malice|w|l|1|p",
+    "Voidfallen's Effigy & Edict|w|x|1|s",
+    "Voidflames|a|e|1|",
+    "Voidspire & Abyssal Veil|w|x|1|p",
+    "Volcanic Greatsword|w|n|19|p",
+    "Vortex|a|e|17|d",
+    "Vortex Grenade|a|e|12|d",
+    "War-forged Guardian Armor|c|n|16|g",
+    "War-forged Guardian Helmet|h|n|16|g",
+    "War-forged Mage Armor|c|n|16|m",
+    "War-forged Mage Helmet|h|n|16|m",
+    "War-forged Warrior Armor|c|n|16|w",
+    "War-forged Warrior Helmet|h|n|16|w",
+    "Warlord Plate Armor|c|n|21|w",
+    "Warlord Plate Helmet|h|n|21|w",
+    "Water Elemental Spellblade|w|n|20|s",
+    "Water Orb|a|r|2|d",
+    "Whirlwind|a|u|4|d",
+    "Wind Blast|a|e|7|d",
+    "Winter Lord's Guardian Armor|c|n|20|g",
+    "Winter Lord's Guardian Helmet|h|n|20|g",
+    "Winter Lord's Mage Cloak|h|n|20|m",
+    "Winter Lord's Mage Robes|c|n|20|m",
+    "Winter Lord's Warrior Armor|c|n|20|w",
+    "Winter Lord's Warrior Helmet|h|n|20|w",
+    "Winterborne|w|l|20|p",
+    "Yokai Transformation|a|e|22|d"
 }
-local rarities = {"common", "uncommon", "rare", "epic", "legendary", "ultimate"}
-for _, rarity in ipairs(rarities) do
-    if type(cfg.selected[rarity]) ~= "boolean" then cfg.selected[rarity] = false end
+local kinds = {w="Weapon", a="Ability", h="Helmet", c="Chest"}
+local rarities = {n="Common/Unspecified", c="Common", u="Uncommon", r="Rare", e="Epic", l="Legendary", x="Ultimate"}
+local rarityConfig = {c="sellCommon", u="sellUncommon", r="sellRare", e="sellEpic", l="sellLegendary", x="sellUltimate"}
+local dungeons = {"Abyssal Void","Aquatic Temple","Boss Raids (Legacy)","Desert Temple","Desert Temple (Legacy)","Egg Island","Enchanted Forest","Ghastly Harbor","Gilded Skies","King's Castle","Northern Lands","Orbital Outpost","Pirate Island","Ready Player Two","Samurai Palace","Steampunk Sewers","The Canals","The Underworld","Volcanic Chambers","Winter Outpost","Winter Outpost (Legacy)","Yokai Peak"}
+local catalog = {}
+local function key(s) return tostring(s or ""):lower():gsub("[^a-z0-9]",""):gsub("armour","armor") end
+for _, raw in ipairs(rawCatalog) do
+    local name, kind, rarity, dung, role = raw:match("^(.-)|(%a)|([^|]*)|(%d+)|([^|]*)$")
+    if name then catalog[#catalog+1] = {name=name,key=key(name),kind=kinds[kind] or "Weapon",kindCode=kind,rarity=rarities[rarity] or "Unknown",rarityCode=rarity,dungeon=dungeons[tonumber(dung)] or "Unknown",role=role} end
 end
 
-local function saveConfig()
-    local ok, encoded = pcall(function() return HttpService:JSONEncode(cfg) end)
-    if not ok then return false end
-    pcall(function() player:SetAttribute(CONFIG_KEY, encoded) end)
-    if type(writefile) == "function" then
-        if type(isfolder) == "function" and type(makefolder) == "function" then
-            pcall(function() if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end end)
-        end
-        pcall(function() writefile(CONFIG_FILE, encoded) end)
-    end
-    return true
-end
-
-local function normalize(value)
-    local s = tostring(value or ""):lower()
-    return (s:match("^%s*(.-)%s*$") or "")
-end
-local function splitNames(s)
-    local out = {}
-    for line in (tostring(s or "") .. "\n"):gmatch("(.-)\n") do
-        local n = normalize(line)
-        if n ~= "" then out[n] = true end
-    end
-    return out
-end
-local function checkAbilityEquipped(item)
-    if type(item.equipped) == "table" then
-        for _, value in pairs(item.equipped) do if value == true then return true end end
-        return false
-    end
-    return item.equipped == true
-end
-local STAT_FIELDS = {
-    physical = {"physicalPower", "physicalDamage"},
-    spell = {"spellPower", "SpellPower", "spellDamage", "SpellDamage"},
-    total = {"maxUpgrades", "MaxUpgrades", "maximumUpgrades", "MaximumUpgrades", "totalUpgrades", "TotalUpgrades"},
-    used = {"currentUpgrade", "CurrentUpgrade", "currentUpgrades", "CurrentUpgrades", "upgradesUsed", "UpgradesUsed"},
-}
-local function readStat(item, fields)
-    for _, field in ipairs(fields) do
-        local raw = item[field]
-        if raw ~= nil then
-            local n = tonumber(raw)
-            if n and n == n and n >= 0 and n < math.huge then return n end
-            return nil
-        end
-    end
-    return nil
-end
-local function armorPotential(item, powerType)
-    local power = readStat(item, STAT_FIELDS[powerType])
-    local total = readStat(item, STAT_FIELDS.total)
-    local used = readStat(item, STAT_FIELDS.used)
-    if power == nil or total == nil or used == nil or used > total then return nil end
-    return power + (total - used) * POWER_PER_UPGRADE
-end
-local function nameMatches(item, target)
-    local n = normalize(target)
-    for _, field in ipairs({"name", "abilityName", "itemName", "gearName"}) do
-        if type(item[field]) == "string" and normalize(item[field]) == n and n ~= "" then return true end
-    end
-    return false
-end
-local function keepByNameRarity(item)
-    if type(item) ~= "table" then return false end
-    local name, rarity = normalize(item.name), normalize(item.rarity)
-    if name == "" or rarity == "" then return false end
-    for _, row in ipairs(cfg.keepRows) do
-        if normalize(row.name) == name and type(row.rarities) == "table" and row.rarities[rarity] == true then return true end
-    end
-    return false
-end
-local function potentialRule(item)
-    if type(item) ~= "table" then return false, true end
-    for _, row in ipairs(cfg.potentialRows) do
-        local n, threshold = normalize(row.name), tonumber(row.power)
-        if n ~= "" and threshold and threshold >= 0 and (row.type == "physical" or row.type == "spell") and nameMatches(item, n) then
-            local value = armorPotential(item, row.type)
-            if value == nil then return true, true end -- Unknown data means safe keep.
-            if value >= threshold then return true, false end
-        end
-    end
-    return false, false
-end
-
-local function scanInventory()
-    local remotes = ReplicatedStorage:FindFirstChild("remotes")
-    local reload = remotes and remotes:FindFirstChild("reloadInvy")
-    if not reload or not reload:IsA("RemoteFunction") then error("reloadInvy RemoteFunction was not found") end
-    local inventory = reload:InvokeServer()
-    if type(inventory) ~= "table" then error("Inventory response is not a table") end
-
-    local payload = {weapon = {}, helmet = {}, chest = {}, ability = {}}
-    local kept, sell = {}, {}
-    local abilityNames = splitNames(cfg.abilityNamesText)
-    local abilityCounts = {}
-    local function add(list, text, reason)
-        table.insert(list, text .. (reason and (" — " .. reason) or ""))
-    end
-    local function processGear(invKey, payloadKey, prefix)
-        local items = inventory[invKey]
-        if items ~= nil and type(items) ~= "table" then error("Inventory category invalid: " .. invKey) end
-        for key, item in pairs(items or {}) do
-            local text = type(item) == "table" and (tostring(item.name or key) .. " · " .. tostring(item.rarity or "?") .. " · Lv " .. tostring(item.levelReq or "?")) or tostring(key)
-            local reason
-            if type(item) ~= "table" then reason = "unrecognized item data"
-            elseif normalize(item.name) == "" then reason = "missing item name"
-            elseif item.equipped == true then reason = "equipped"
-            elseif item.equipped ~= false then reason = "unknown equipped status"
-            elseif keepByNameRarity(item) then reason = "keep by name + rarity"
-            else
-                local pkeep, unknown = potentialRule(item)
-                if pkeep then reason = unknown and "potential data unavailable (safe keep)" or "armor potential" end
-            end
-            if not reason and (type(item.rarity) ~= "string" or not cfg.selected[normalize(item.rarity)]) then reason = "rarity not selected" end
-            if not reason and cfg.keepLevel > 0 then
-                local level = tonumber(item.levelReq)
-                if level == nil then reason = "unknown level"
-                elseif level >= cfg.keepLevel then reason = "level " .. cfg.keepLevel .. "+" end
-            end
-            local id = type(key) == "string" and tonumber(key:match("^" .. prefix .. "_(%d+)$")) or nil
-            if not reason and not id then reason = "unknown item ID" end
-            if reason then add(kept, text, reason)
-            else table.insert(payload[payloadKey], id); add(sell, text) end
-        end
-    end
-    processGear("weapons", "weapon", "weapon")
-    processGear("helmets", "helmet", "helmet")
-    processGear("chests", "chest", "chest")
-
-    local abilities = {}
-    for key, item in pairs(inventory.abilities or {}) do
-        if type(item) == "table" then table.insert(abilities, {key = key, item = item}) end
-    end
-    table.sort(abilities, function(a, b) return tostring(a.key) < tostring(b.key) end)
-    for _, entry in ipairs(abilities) do
-        local key, item = entry.key, entry.item
-        local text = tostring(item.name or key) .. " · " .. tostring(item.rarity or "?") .. " · Lv " .. tostring(item.levelReq or "?")
-        local reason, forceSellReason
-        if checkAbilityEquipped(item) then reason = "equipped"
-        elseif keepByNameRarity(item) then reason = "keep by name + rarity"
-        else
-            local pkeep, unknown = potentialRule(item)
-            if pkeep then reason = unknown and "potential data unavailable (safe keep)" or "armor potential"
-            elseif cfg.abilityAmount > 0 then
-                local n = normalize(item.name)
-                if n == "" then forceSellReason = "missing ability name"
-                elseif next(abilityNames) ~= nil and not abilityNames[n] then forceSellReason = "ability not listed"
-                else
-                    local used = abilityCounts[n] or 0
-                    if used < cfg.abilityAmount then abilityCounts[n] = used + 1; reason = "keep ability quota"
-                    else forceSellReason = "ability quota exceeded" end
-                end
-            end
-        end
-        local id = type(key) == "string" and tonumber(key:match("^ability_(%d+)$")) or nil
-        if reason then add(kept, text, reason)
-        elseif forceSellReason then
-            if id then table.insert(payload.ability, id); add(sell, text, forceSellReason)
-            else add(kept, text, "unknown item ID") end
-        elseif not id then add(kept, text, "unknown item ID")
-        elseif type(item.rarity) ~= "string" then add(kept, text, "unknown rarity")
-        elseif cfg.selected[normalize(item.rarity)] then table.insert(payload.ability, id); add(sell, text)
-        else add(kept, text, "rarity not selected") end
-    end
-    local count = #payload.weapon + #payload.helmet + #payload.chest + #payload.ability
-    return {payload = payload, kept = kept, sell = sell, count = count, inventory = inventory}
-end
-
-local function payloadIds(payload)
-    local ids = {}
-    for key, list in pairs(payload) do for _, id in ipairs(list) do ids[key .. "_" .. tostring(id)] = true end end
-    return ids
-end
-local function inventoryStillContains(inv, ids)
-    local found = 0
-    for _, pair in ipairs({{"weapons", "weapon"}, {"helmets", "helmet"}, {"chests", "chest"}, {"abilities", "ability"}}) do
-        for key, item in pairs(inv[pair[1]] or {}) do
-            local id = type(key) == "string" and (pair[2] .. "_" .. tostring(key:match("^" .. pair[2] .. "_(%d+)$"))) or ""
-            if ids[id] then found = found + 1 end
-            if type(item) == "table" and type(item.UniqueItemID) == "string" and ids[item.UniqueItemID] then found = found + 1 end
-        end
-    end
-    return found
-end
-
--- UI
-local playerGui = player:WaitForChild("PlayerGui")
-local old = playerGui:FindFirstChild("HarvardAutoSellGUI")
-if old then old:Destroy() end
-local gui = Instance.new("ScreenGui")
-gui.Name = "HarvardAutoSellGUI"; gui.ResetOnSpawn = false; gui.Parent = playerGui
-local function make(class, props, parent)
-    local obj = Instance.new(class)
-    for k, v in pairs(props) do obj[k] = v end
-    obj.Parent = parent
-    return obj
-end
-local bg = Color3.fromRGB(24, 27, 35)
-local card = Color3.fromRGB(38, 43, 55)
-local ink = Color3.fromRGB(238, 241, 248)
-local muted = Color3.fromRGB(164, 174, 193)
-local blue = Color3.fromRGB(62, 112, 218)
-local green = Color3.fromRGB(53, 147, 102)
-local red = Color3.fromRGB(161, 69, 69)
-local frame = make("Frame", {Size = UDim2.fromOffset(540, 650), Position = UDim2.new(.5, -270, .5, -325), BackgroundColor3 = bg, BorderSizePixel = 0}, gui)
-make("UICorner", {CornerRadius = UDim.new(0, 12)}, frame)
-make("UIStroke", {Color = Color3.fromRGB(65, 73, 91), Thickness = 1}, frame)
-make("TextLabel", {Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -120, 0, 32), BackgroundTransparency = 1, Text = "Harvard Auto Sell · Safe Batch", TextColor3 = ink, TextSize = 17, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left}, frame)
-local close = make("TextButton", {Position = UDim2.new(1, -42, 0, 8), Size = UDim2.fromOffset(30, 28), BackgroundColor3 = card, Text = "×", TextColor3 = ink, TextSize = 18, Font = Enum.Font.GothamBold}, frame)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, close)
-local content = make("ScrollingFrame", {Position = UDim2.fromOffset(12, 46), Size = UDim2.new(1, -24, 1, -58), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new()}, frame)
-local layout = make("UIListLayout", {Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder}, content)
-layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() content.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 12) end)
-local function label(text, height, color, bold)
-    return make("TextLabel", {Size = UDim2.new(1, -4, 0, height or 22), BackgroundTransparency = 1, Text = text, TextColor3 = color or ink, TextSize = 12, Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center}, content)
-end
-local function button(text, width, color)
-    local b = make("TextButton", {Size = UDim2.new(0, width, 0, 30), BackgroundColor3 = color or card, Text = text, TextColor3 = ink, TextSize = 12, Font = Enum.Font.GothamMedium}, content)
-    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
-    return b
-end
-local function textbox(text, width)
-    local b = make("TextBox", {Size = UDim2.new(0, width, 0, 30), BackgroundColor3 = card, Text = text, PlaceholderText = "value", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, content)
-    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
-    return b
-end
-local function row()
-    return make("Frame", {Size = UDim2.new(1, -2, 0, 32), BackgroundTransparency = 1}, content)
-end
-local function rowButton(parent, text, x, width, color)
-    local b = make("TextButton", {Position = UDim2.fromOffset(x, 0), Size = UDim2.fromOffset(width, 30), BackgroundColor3 = color or card, Text = text, TextColor3 = ink, TextSize = 11, Font = Enum.Font.GothamMedium}, parent)
-    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
-    return b
-end
-
-label("Auto Sell starts OFF on first run. Preview does not sell anything.", 28, muted)
-local autoButton = button(cfg.auto and "Auto Sell: ON" or "Auto Sell: OFF", 160, cfg.auto and green or card)
-local modeRow = row()
-local secondsButton = rowButton(modeRow, "Every seconds", 0, 125, cfg.scheduleMode == "seconds" and blue or card)
-local mapsButton = rowButton(modeRow, "Every dungeon maps", 132, 145, cfg.scheduleMode == "maps" and blue or card)
-local scheduleRow = row()
-local scheduleLabel = make("TextLabel", {Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(170, 30), BackgroundTransparency = 1, Text = "Interval (seconds)", TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left}, scheduleRow)
-local scheduleBox = make("TextBox", {Position = UDim2.fromOffset(174, 0), Size = UDim2.fromOffset(100, 30), BackgroundColor3 = card, Text = tostring(cfg.scheduleValue), TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, scheduleRow)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, scheduleBox)
-local previewButton = button("Preview inventory", 155, blue)
-local sellNowButton = button("Sell once now", 135, card)
-label("Sell rarity filters (selected rarities can be sold)", 22, muted, true)
-local rarityRow = row()
-local rarityButtons = {}
-for i, rarity in ipairs(rarities) do
-    local x = (i - 1) * 86
-    local b = rowButton(rarityRow, (cfg.selected[rarity] and "✓ " or "○ ") .. rarity, x, 82, cfg.selected[rarity] and blue or card)
-    rarityButtons[rarity] = b
-end
-label("Keep level: items at this level or higher are protected (0 disables)", 25, muted)
-local levelBox = textbox(tostring(cfg.keepLevel), 100)
-label("Ability quota: keep N of each named ability; 0 disables. Optional names: one per line.", 32, muted)
-local abilityRow = row()
-local abilityAmountBox = make("TextBox", {Size = UDim2.fromOffset(100, 30), BackgroundColor3 = card, Text = tostring(cfg.abilityAmount), TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, abilityRow)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, abilityAmountBox)
-local abilityNamesBox = make("TextBox", {Position = UDim2.fromOffset(108, 0), Size = UDim2.new(1, -108, 0, 56), BackgroundColor3 = card, Text = cfg.abilityNamesText, PlaceholderText = "Ability name 1\nAbility name 2", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, abilityRow)
-abilityRow.Size = UDim2.new(1, -2, 0, 58); make("UICorner", {CornerRadius = UDim.new(0, 6)}, abilityNamesBox)
-label("Keep exact item name + rarity (one rule per line: Item Name | rarity,rarity)", 30, muted, true)
-local keepBox = make("TextBox", {Size = UDim2.new(1, -4, 0, 60), BackgroundColor3 = card, Text = "", PlaceholderText = "Example Sword | legendary,ultimate", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, content)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, keepBox)
-label("Armor potential rules (one per line: Item Name | physical/spell | threshold). Missing stat data safely keeps the item.", 34, muted, true)
-local potentialBox = make("TextBox", {Size = UDim2.new(1, -4, 0, 60), BackgroundColor3 = card, Text = "", PlaceholderText = "Example Armor | physical | 100", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, content)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, potentialBox)
-local status = label("Ready. Auto Sell is " .. (cfg.auto and "ON" or "OFF") .. ".", 32, muted)
-local results = make("TextLabel", {Size = UDim2.new(1, -4, 0, 100), BackgroundColor3 = card, Text = "Preview results will appear here.", TextColor3 = ink, TextSize = 11, Font = Enum.Font.Code, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true}, content)
-make("UICorner", {CornerRadius = UDim.new(0, 6)}, results)
-
-local function parseKeepRows()
-    local out = {}
-    for line in (keepBox.Text .. "\n"):gmatch("(.-)\n") do
-        local name, list = line:match("^%s*(.-)%s*|%s*(.-)%s*$")
-        if name and name ~= "" then
-            local rs = {}
-            for rarity in list:gmatch("[^,]+") do rs[normalize(rarity)] = true end
-            table.insert(out, {name = name, rarities = rs})
-        end
-    end
-    return out
-end
-local function parsePotentialRows()
-    local out = {}
-    for line in (potentialBox.Text .. "\n"):gmatch("(.-)\n") do
-        local name, kind, threshold = line:match("^%s*(.-)%s*|%s*(.-)%s*|%s*(.-)%s*$")
-        kind = normalize(kind)
-        if name and name ~= "" and (kind == "physical" or kind == "spell") and tonumber(threshold) and tonumber(threshold) >= 0 then
-            table.insert(out, {name = name, type = kind, power = tostring(threshold)})
-        end
-    end
-    return out
-end
-local function syncFromUI()
-    local value = tonumber(scheduleBox.Text)
-    local level = tonumber(levelBox.Text)
-    local amount = tonumber(abilityAmountBox.Text)
-    if not value or value < 1 or value % 1 ~= 0 or not level or level < 0 or level % 1 ~= 0 or not amount or amount < 0 or amount % 1 ~= 0 then
-        return false, "Enter whole numbers: schedule ≥ 1, keep level ≥ 0, ability quota ≥ 0."
-    end
-    cfg.scheduleValue = value; cfg.keepLevel = level; cfg.abilityAmount = amount
-    cfg.abilityNamesText = abilityNamesBox.Text
-    cfg.keepRows = parseKeepRows(); cfg.potentialRows = parsePotentialRows()
-    saveConfig()
-    return true
-end
-local function updateModeUI()
-    secondsButton.BackgroundColor3 = cfg.scheduleMode == "seconds" and blue or card
-    mapsButton.BackgroundColor3 = cfg.scheduleMode == "maps" and blue or card
-    scheduleLabel.Text = cfg.scheduleMode == "seconds" and "Interval (seconds)" or "Every N dungeon maps"
-end
-local function updateRarityUI()
-    for rarity, b in pairs(rarityButtons) do
-        b.Text = (cfg.selected[rarity] and "✓ " or "○ ") .. rarity
-        b.BackgroundColor3 = cfg.selected[rarity] and blue or card
-    end
-end
-local function refreshTextRules()
-    local keepLines, potentialLines = {}, {}
-    for _, r in ipairs(cfg.keepRows) do
-        local rs = {}
-        for rarity, yes in pairs(r.rarities or {}) do if yes then table.insert(rs, rarity) end end
-        table.sort(rs)
-        table.insert(keepLines, tostring(r.name) .. " | " .. table.concat(rs, ","))
-    end
-    for _, r in ipairs(cfg.potentialRows) do table.insert(potentialLines, tostring(r.name) .. " | " .. tostring(r.type) .. " | " .. tostring(r.power)) end
-    keepBox.Text = table.concat(keepLines, "\n")
-    potentialBox.Text = table.concat(potentialLines, "\n")
-end
-refreshTextRules(); updateModeUI(); updateRarityUI()
-
-local busy = false
-local lastSellAt = 0
-local lastMapTrigger = cfg.dungeonCount
-local lastPlaceId = cfg.lastPlaceId
-local function preview(doSell)
-    if busy then return false, "A sale/preview is already running." end
-    local ok, message = syncFromUI()
-    if not ok then status.Text = message; return false, message end
-    busy = true
-    status.Text = "Reading inventory…"
-    local success, plan = pcall(scanInventory)
-    if not success then busy = false; status.Text = "Inventory error: " .. tostring(plan); return false, tostring(plan) end
-    local lines = {"WOULD SELL: " .. #plan.sell, "WOULD KEEP: " .. #plan.kept}
-    for i = 1, math.min(#plan.sell, 24) do table.insert(lines, "SELL  " .. plan.sell[i]) end
-    if #plan.sell > 24 then table.insert(lines, "… and " .. (#plan.sell - 24) .. " more") end
-    for i = 1, math.min(#plan.kept, 16) do table.insert(lines, "KEEP  " .. plan.kept[i]) end
-    if #plan.kept > 16 then table.insert(lines, "… and " .. (#plan.kept - 16) .. " more") end
-    results.Text = table.concat(lines, "\n")
-    if not doSell or plan.count == 0 then
-        status.Text = doSell and "Nothing matched the sell rules." or "Preview complete — nothing was sold."
-        busy = false
-        return true, plan
-    end
-    if cfg.auto ~= true and doSell then
-        status.Text = "Auto Sell is OFF. Turn it ON to allow selling."
-        busy = false
-        return false, "Auto Sell is OFF"
-    end
-    local remotes = ReplicatedStorage:FindFirstChild("remotes")
-    local sellRemote = remotes and remotes:FindFirstChild("sellItemEvent")
-    local reload = remotes and remotes:FindFirstChild("reloadInvy")
-    if not sellRemote or not sellRemote:IsA("RemoteEvent") or not reload then
-        busy = false; status.Text = "Sell remote or inventory remote missing."; return false, "remote missing"
-    end
-    -- IMPORTANT: one batch FireServer call for all filtered items, including in dungeons.
-    local sent, sendErr = pcall(function() sellRemote:FireServer(plan.payload) end)
-    if not sent then busy = false; status.Text = "Batch send failed: " .. tostring(sendErr); return false, tostring(sendErr) end
-    task.wait(2)
-    local verifyOk, after = pcall(function() return reload:InvokeServer() end)
-    if not verifyOk or type(after) ~= "table" then
-        status.Text = ("Sent one batch for %d items; verification inventory unavailable."):format(plan.count)
-        busy = false; return true, "verification unavailable"
-    end
-    local ids = payloadIds(plan.payload)
-    local remaining = inventoryStillContains(after, ids)
-    local gone = math.max(0, plan.count - remaining)
-    status.Text = ("Batch requested %d; verified missing from inventory: %d. Check the game result if this differs."):format(plan.count, gone)
-    lastSellAt = os.clock()
-    busy = false
-    saveConfig()
-    return true, plan
-end
-
-local function setAuto(value)
-    if value and not cfg.auto then
-        local ok, plan = preview(false)
-        if not ok then return end
-        local confirm = make("Frame", {Size = UDim2.fromOffset(360, 170), Position = UDim2.new(.5, -180, .5, -85), BackgroundColor3 = bg, ZIndex = 20}, gui)
-        make("UICorner", {CornerRadius = UDim.new(0, 10)}, confirm)
-        make("TextLabel", {Position = UDim2.fromOffset(14, 12), Size = UDim2.new(1, -28, 0, 76), BackgroundTransparency = 1, Text = "Preview ready. This enables automatic selling on the selected schedule. The batch payload in dungeons is not confirmed by the source files. Enable Auto Sell?", TextWrapped = true, TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ZIndex = 21}, confirm)
-        local yes = make("TextButton", {Position = UDim2.fromOffset(14, 112), Size = UDim2.fromOffset(150, 34), BackgroundColor3 = green, Text = "Confirm ON", TextColor3 = ink, TextSize = 12, ZIndex = 21}, confirm)
-        local no = make("TextButton", {Position = UDim2.fromOffset(190, 112), Size = UDim2.fromOffset(150, 34), BackgroundColor3 = card, Text = "Cancel", TextColor3 = ink, TextSize = 12, ZIndex = 21}, confirm)
-        yes.MouseButton1Click:Once(function()
-            cfg.auto = true; saveConfig(); autoButton.Text = "Auto Sell: ON"; autoButton.BackgroundColor3 = green; status.Text = "Auto Sell ON. Config saved."; confirm:Destroy()
-        end)
-        no.MouseButton1Click:Once(function() confirm:Destroy() end)
-        return
-    end
-    cfg.auto = value == true
-    autoButton.Text = cfg.auto and "Auto Sell: ON" or "Auto Sell: OFF"
-    autoButton.BackgroundColor3 = cfg.auto and green or card
-    saveConfig()
-    status.Text = "Auto Sell " .. (cfg.auto and "ON" or "OFF") .. ". Configuration saved."
-end
-
-for rarity, b in pairs(rarityButtons) do
-    b.MouseButton1Click:Connect(function()
-        cfg.selected[rarity] = not cfg.selected[rarity]
-        updateRarityUI(); saveConfig()
+local cfg = {autoSell=false,sellAfterGames=10,sellKeepLevel=0,games=0,protectedNames={},
+    sellCommon=false,sellUncommon=false,sellRare=false,sellEpic=false,sellLegendary=false,sellUltimate=false}
+local function save()
+    if not (writefile and makefolder) then return end
+    pcall(function()
+        if isfolder and not isfolder("HarvardAutoSell") then makefolder("HarvardAutoSell") end
+        writefile(CONFIG_FILE,HttpService:JSONEncode(cfg))
     end)
 end
-secondsButton.MouseButton1Click:Connect(function() cfg.scheduleMode = "seconds"; updateModeUI(); saveConfig() end)
-mapsButton.MouseButton1Click:Connect(function() cfg.scheduleMode = "maps"; updateModeUI(); saveConfig() end)
-autoButton.MouseButton1Click:Connect(function() setAuto(not cfg.auto) end)
-previewButton.MouseButton1Click:Connect(function() preview(false) end)
-sellNowButton.MouseButton1Click:Connect(function()
-    if not cfg.auto then status.Text = "Turn Auto Sell ON first; preview remains available while OFF."; return end
-    preview(true)
-end)
-close.MouseButton1Click:Connect(function() saveConfig(); gui:Destroy() end)
-for _, box in ipairs({scheduleBox, levelBox, abilityAmountBox, abilityNamesBox, keepBox, potentialBox}) do
-    box.FocusLost:Connect(function() local ok, err = syncFromUI(); if not ok then status.Text = err end end)
+if isfile and readfile and isfile(CONFIG_FILE) then
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
+    if ok and type(data)=="table" then for k,v in pairs(data) do if cfg[k]~=nil then cfg[k]=v end end end
 end
+if type(cfg.protectedNames)~="table" then cfg.protectedNames={} end
+if type(cfg.autoSell)~="boolean" then cfg.autoSell=false end
 
--- Restore the enabled state after teleport/re-execution through persisted config.
--- A new run with no config is OFF. Count a dungeon entry only when place changes.
-local currentPlace = game.PlaceId
-if lastPlaceId and lastPlaceId ~= currentPlace and currentPlace ~= LOBBY_PLACE_ID then
-    cfg.dungeonCount = cfg.dungeonCount + 1
-    saveConfig()
+local function remotes()
+    local folder=ReplicatedStorage:FindFirstChild("remotes")
+    if not folder then return nil,nil end
+    return folder:FindFirstChild("sellItemEvent"),folder:FindFirstChild("reloadInvy")
 end
-cfg.lastPlaceId = currentPlace
-saveConfig()
-local startedAt = os.clock()
-local nextMapCount = cfg.dungeonCount + math.max(1, math.floor(cfg.scheduleValue))
-local wasDungeon = currentPlace ~= LOBBY_PLACE_ID
-local lastObservedPlace = currentPlace
-
-task.spawn(function()
-    while gui.Parent do
-        task.wait(1)
-        if not gui.Parent then break end
-        local place = game.PlaceId
-        if place ~= lastObservedPlace then
-            if place ~= LOBBY_PLACE_ID then
-                cfg.dungeonCount = cfg.dungeonCount + 1
-                if cfg.scheduleMode == "maps" and cfg.dungeonCount >= nextMapCount then
-                    nextMapCount = cfg.dungeonCount + math.max(1, math.floor(cfg.scheduleValue))
-                    if cfg.auto then task.spawn(function() preview(true) end) end
-                end
+local function inventory()
+    local _, reload=remotes()
+    if not reload then return nil,"reloadInvy remote missing" end
+    local ok, data=pcall(function() return reload:InvokeServer() end)
+    if not ok or type(data)~="table" then return nil,"Inventory could not be loaded" end
+    return data
+end
+local function itemName(it) return tostring(it.Name or it.name or it.ItemName or it.itemName or it.DisplayName or "") end
+local function itemRarity(it)
+    local v=it.Rarity or it.rarity or it.Tier or it.tier
+    if type(v)=="string" then
+        v=v:lower()
+        for _,r in ipairs({"ultimate","legendary","epic","rare","uncommon","common"}) do if v:find(r,1,true) then return ({ultimate="x",legendary="l",epic="e",rare="r",uncommon="u",common="c"})[r] end end
+    elseif type(v)=="number" then return ({[1]="c",[2]="u",[3]="r",[4]="e",[5]="l",[6]="x"})[v] end
+end
+local function equipped(it) return it.Equipped==true or it.IsEquipped==true or it.equipped==true end
+local function itemLevel(it) return tonumber(it.Level or it.level or it.ItemLevel or it.itemLevel) end
+local function groups(inv)
+    return {weapon=inv.weapons or inv.weapon or {},helmet=inv.helmets or inv.helmet or {},chest=inv.chests or inv.chest or {},ability=inv.abilities or inv.ability or {}}
+end
+local function plan(inv)
+    local payload={weapon={},helmet={},chest={},ability={}}
+    local sell, keep={},{}
+    for group, list in pairs(groups(inv)) do
+        for _,it in pairs(list) do
+            if type(it)=="table" then
+                local name=itemName(it); local rarity=itemRarity(it); local level=itemLevel(it)
+                local protected=equipped(it) or cfg.protectedNames[key(name)]==true
+                -- Unknown rarity/level is conservatively kept.
+                if not rarity or not rarityConfig[rarity] or level==nil then protected=true end
+                if level and level >= (tonumber(cfg.sellKeepLevel) or 0) then protected=true end
+                if not protected and rarity and rarityConfig[rarity] and cfg[rarityConfig[rarity]]==true then
+                    payload[group][#payload[group]+1]=it
+                    sell[#sell+1]={name=name,rarity=rarities[rarity] or rarity,id=it.UniqueItemID,group=group}
+                else keep[#keep+1]={name=name,rarity=rarity and rarities[rarity] or "Unknown"} end
             end
-            lastObservedPlace = place; cfg.lastPlaceId = place; saveConfig()
         end
-        if cfg.auto and cfg.scheduleMode == "seconds" and not busy and os.clock() - math.max(startedAt, lastSellAt) >= cfg.scheduleValue then
-            startedAt = os.clock()
-            task.spawn(function() preview(true) end)
-        end
+    end
+    return payload,sell,keep
+end
+local function payloadCount(p) local n=0; for _,v in pairs(p) do n+=#v end; return n end
+
+-- Harvard-like dark UI, with Auto sell, rarity controls, and the extracted item list.
+local gui=Instance.new("ScreenGui"); gui.Name="HarvardAutoSellStandalone"; gui.ResetOnSpawn=false
+pcall(function() gui.Parent=gethui and gethui() or player:WaitForChild("PlayerGui") end)
+if not gui.Parent then gui.Parent=player:WaitForChild("PlayerGui") end
+local root=Instance.new("Frame",gui); root.Size=UDim2.fromOffset(440,560); root.Position=UDim2.new(0,24,.5,-280); root.BackgroundColor3=Color3.fromRGB(22,24,30); root.BorderSizePixel=0
+Instance.new("UICorner",root).CornerRadius=UDim.new(0,10)
+local top=Instance.new("Frame",root); top.Size=UDim2.new(1,0,0,42); top.BackgroundColor3=Color3.fromRGB(29,32,40); top.BorderSizePixel=0
+local title=Instance.new("TextLabel",top); title.BackgroundTransparency=1; title.Position=UDim2.fromOffset(14,0); title.Size=UDim2.new(1,-55,1,0); title.Font=Enum.Font.GothamSemibold; title.TextSize=15; title.TextXAlignment=Enum.TextXAlignment.Left; title.TextColor3=Color3.fromRGB(238,240,246); title.Text="Harvard  /  Auto sell + item list"
+local close=Instance.new("TextButton",top); close.Size=UDim2.fromOffset(32,28); close.Position=UDim2.new(1,-38,0,7); close.Text="×"; close.Font=Enum.Font.GothamBold; close.TextSize=20; close.TextColor3=Color3.fromRGB(235,235,240); close.BackgroundColor3=Color3.fromRGB(52,56,67); close.BorderSizePixel=0
+local scroll=Instance.new("ScrollingFrame",root); scroll.Position=UDim2.fromOffset(10,50); scroll.Size=UDim2.new(1,-20,1,-60); scroll.BackgroundTransparency=1; scroll.BorderSizePixel=0; scroll.ScrollBarThickness=4; scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y; scroll.CanvasSize=UDim2.new()
+local sl=Instance.new("UIListLayout",scroll); sl.Padding=UDim.new(0,8); sl.SortOrder=Enum.SortOrder.LayoutOrder
+Instance.new("UIPadding",scroll).PaddingBottom=UDim.new(0,8)
+local function section(name,desc,height)
+    local f=Instance.new("Frame",scroll); f.Size=UDim2.new(1,-4,0,height); f.BackgroundColor3=Color3.fromRGB(30,33,41); f.BorderSizePixel=0; Instance.new("UICorner",f).CornerRadius=UDim.new(0,8)
+    local h=Instance.new("TextLabel",f); h.BackgroundTransparency=1; h.Position=UDim2.fromOffset(10,6); h.Size=UDim2.new(1,-20,0,20); h.Font=Enum.Font.GothamSemibold; h.TextSize=13; h.TextXAlignment=Enum.TextXAlignment.Left; h.TextColor3=Color3.fromRGB(229,232,240); h.Text=name
+    local d=Instance.new("TextLabel",f); d.BackgroundTransparency=1; d.Position=UDim2.fromOffset(10,27); d.Size=UDim2.new(1,-20,0,28); d.Font=Enum.Font.Gotham; d.TextSize=10; d.TextWrapped=true; d.TextXAlignment=Enum.TextXAlignment.Left; d.TextYAlignment=Enum.TextYAlignment.Top; d.TextColor3=Color3.fromRGB(158,164,178); d.Text=desc or ""
+    return f
+end
+local function button(parent,text,pos,size,fn,danger)
+    local b=Instance.new("TextButton",parent); b.Position=pos; b.Size=size; b.BackgroundColor3=danger and Color3.fromRGB(147,54,61) or Color3.fromRGB(60,70,91); b.BorderSizePixel=0; b.Text=text; b.Font=Enum.Font.GothamSemibold; b.TextSize=11; b.TextColor3=Color3.fromRGB(246,247,250); Instance.new("UICorner",b).CornerRadius=UDim.new(0,5); b.MouseButton1Click:Connect(fn); return b
+end
+local status=section("Auto sell","Sells selected unequipped items on lobby arrival and after a set number of dungeon starts.",138)
+local statusText=Instance.new("TextLabel",status); statusText.BackgroundTransparency=1; statusText.Position=UDim2.fromOffset(10,57); statusText.Size=UDim2.new(1,-20,0,22); statusText.Font=Enum.Font.Gotham; statusText.TextSize=11; statusText.TextXAlignment=Enum.TextXAlignment.Left; statusText.TextColor3=Color3.fromRGB(198,203,215)
+local gamesLabel=Instance.new("TextLabel",status); gamesLabel.BackgroundTransparency=1; gamesLabel.Position=UDim2.fromOffset(10,82); gamesLabel.Size=UDim2.fromOffset(112,24); gamesLabel.Font=Enum.Font.Gotham; gamesLabel.TextSize=11; gamesLabel.TextColor3=Color3.fromRGB(205,210,220); gamesLabel.TextXAlignment=Enum.TextXAlignment.Left; gamesLabel.Text="Sell after games"
+local gamesBox=Instance.new("TextBox",status); gamesBox.Position=UDim2.fromOffset(124,81); gamesBox.Size=UDim2.fromOffset(50,25); gamesBox.BackgroundColor3=Color3.fromRGB(43,47,58); gamesBox.BorderSizePixel=0; gamesBox.TextColor3=Color3.fromRGB(245,246,249); gamesBox.Font=Enum.Font.Gotham; gamesBox.TextSize=12; gamesBox.Text=tostring(cfg.sellAfterGames); gamesBox.ClearTextOnFocus=false
+local keepLabel=Instance.new("TextLabel",status); keepLabel.BackgroundTransparency=1; keepLabel.Position=UDim2.fromOffset(190,82); keepLabel.Size=UDim2.fromOffset(84,24); keepLabel.Font=Enum.Font.Gotham; keepLabel.TextSize=11; keepLabel.TextColor3=Color3.fromRGB(205,210,220); keepLabel.TextXAlignment=Enum.TextXAlignment.Left; keepLabel.Text="Keep level ≥"
+local keepBox=Instance.new("TextBox",status); keepBox.Position=UDim2.fromOffset(278,81); keepBox.Size=UDim2.fromOffset(50,25); keepBox.BackgroundColor3=Color3.fromRGB(43,47,58); keepBox.BorderSizePixel=0; keepBox.TextColor3=Color3.fromRGB(245,246,249); keepBox.Font=Enum.Font.Gotham; keepBox.TextSize=12; keepBox.Text=tostring(cfg.sellKeepLevel); keepBox.ClearTextOnFocus=false
+local note=Instance.new("TextLabel",status); note.BackgroundTransparency=1; note.Position=UDim2.fromOffset(10,108); note.Size=UDim2.new(1,-20,0,18); note.Font=Enum.Font.Gotham; note.TextSize=10; note.TextXAlignment=Enum.TextXAlignment.Left; note.TextColor3=Color3.fromRGB(238,183,124)
+local function refresh()
+    local inv=inventory()
+    if not inv then statusText.Text=(cfg.autoSell and "Enabled • waiting for inventory" or "Switched off"); return end
+    local p,s,k=plan(inv)
+    statusText.Text=string.format("%s • %d item definitions • %d eligible • %d kept",cfg.autoSell and "Enabled" or "Switched off",#catalog,#s,#k)
+end
+gamesBox.FocusLost:Connect(function() cfg.sellAfterGames=math.clamp(math.floor(tonumber(gamesBox.Text) or 10),1,50); gamesBox.Text=tostring(cfg.sellAfterGames); save() end)
+keepBox.FocusLost:Connect(function() cfg.sellKeepLevel=math.max(0,math.floor(tonumber(keepBox.Text) or 0)); keepBox.Text=tostring(cfg.sellKeepLevel); save(); refresh() end)
+local function toggleAuto()
+    if cfg.autoSell then cfg.autoSell=false; note.Text="Auto Sell switched off."; save(); refresh(); return end
+    local inv=inventory()
+    if not inv then note.Text="Cannot preview: inventory unavailable."; return end
+    local p,s=plan(inv)
+    note.Text=string.format("Preview: %d item(s) would be sold. Press Enable again to confirm.",#s)
+    if _G.__HarvardStandaloneEnableArmed then
+        _G.__HarvardStandaloneEnableArmed=nil; cfg.autoSell=true; note.Text="Auto Sell enabled."; save(); refresh()
+    else
+        _G.__HarvardStandaloneEnableArmed=true
+        task.delay(8,function() _G.__HarvardStandaloneEnableArmed=nil end)
+    end
+end
+button(status,"Enable / disable",UDim2.new(0,10,1,-32),UDim2.new(.48,-8,0,25),toggleAuto)
+button(status,"Sell once now",UDim2.new(.5,0,1,-32),UDim2.new(.48,-8,0,25),function()
+    local inv,err=inventory(); if not inv then note.Text=err or "Inventory unavailable"; return end
+    local p,s=plan(inv); if #s==0 then note.Text="Nothing matches current sale rules."; return end
+    note.Text=string.format("Preview: %d item(s). Press Sell once again within 8 seconds to confirm.",#s)
+    if _G.__HarvardStandaloneSellArmed then
+        _G.__HarvardStandaloneSellArmed=nil
+        local remote=select(1,remotes()); if not remote then note.Text="sellItemEvent missing"; return end
+        local ok=pcall(function() remote:FireServer(p) end)
+        note.Text=ok and "Sell request sent; verify inventory." or "Sell request failed."
+    else
+        _G.__HarvardStandaloneSellArmed=true
+        task.delay(8,function() _G.__HarvardStandaloneSellArmed=nil end)
     end
 end)
 
--- Save on exit/teleport; ON/OFF and schedule persist for the next execution.
-player.OnTeleport:Connect(function()
-    cfg.lastPlaceId = game.PlaceId
-    saveConfig()
-end)
-game:BindToClose(function() cfg.lastPlaceId = game.PlaceId; saveConfig() end)
+local raritySection=section("Rarities to sell","Choose the rarities Harvard Auto Sell is allowed to sell. Changing a rarity switches Auto Sell off until re-enabled.",220)
+local rarityRows={{"c","Common","sellCommon"},{"u","Uncommon","sellUncommon"},{"r","Rare","sellRare"},{"e","Epic","sellEpic"},{"l","Legendary","sellLegendary"},{"x","Ultimate","sellUltimate"}}
+for i,row in ipairs(rarityRows) do
+    local b=button(raritySection,(cfg[row[3]] and "✓  " or "□  ")..row[2],UDim2.fromOffset(10,56+(i-1)*26),UDim2.new(1,-20,0,23),function()
+        cfg[row[3]]=not cfg[row[3]]; if cfg.autoSell then cfg.autoSell=false end
+        b.Text=(cfg[row[3]] and "✓  " or "□  ")..row[2]; b.BackgroundColor3=cfg[row[3]] and Color3.fromRGB(49,108,83) or Color3.fromRGB(60,70,91)
+        save(); refresh()
+    end)
+end
 
-status.Text = cfg.auto and "Auto Sell restored ON. Preview first; selling follows saved schedule." or "Ready. Auto Sell is OFF; preview is safe."
+local listSection=section("Harvard item list","Extracted item catalog. Search and click a row to protect/unprotect that item by normalized name.",190)
+local search=Instance.new("TextBox",listSection); search.Position=UDim2.fromOffset(10,57); search.Size=UDim2.new(1,-20,0,25); search.BackgroundColor3=Color3.fromRGB(43,47,58); search.BorderSizePixel=0; search.TextColor3=Color3.fromRGB(245,246,249); search.PlaceholderText="Search item, rarity, type, dungeon..."; search.Font=Enum.Font.Gotham; search.TextSize=11; search.ClearTextOnFocus=false
+local list=Instance.new("ScrollingFrame",listSection); list.Position=UDim2.fromOffset(10,87); list.Size=UDim2.new(1,-20,0,90); list.BackgroundColor3=Color3.fromRGB(25,28,35); list.BorderSizePixel=0; list.ScrollBarThickness=4; list.CanvasSize=UDim2.new()
+local ll=Instance.new("UIListLayout",list); ll.Padding=UDim.new(0,2)
+ll:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() list.CanvasSize=UDim2.new(0,0,0,ll.AbsoluteContentSize.Y+4) end)
+local listCount=Instance.new("TextLabel",listSection); listCount.BackgroundTransparency=1; listCount.Position=UDim2.new(0,10,1,-15); listCount.Size=UDim2.new(1,-20,0,12); listCount.Font=Enum.Font.Gotham; listCount.TextSize=10; listCount.TextXAlignment=Enum.TextXAlignment.Left; listCount.TextColor3=Color3.fromRGB(158,164,178)
+local function renderList()
+    for _,c in ipairs(list:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+    local q=search.Text:lower(); local matches=0
+    for _,e in ipairs(catalog) do
+        local hay=(e.name.." "..e.kind.." "..e.rarity.." "..e.dungeon):lower()
+        if q=="" or hay:find(q,1,true) then
+            matches+=1
+            if matches<=150 then
+                local protected=cfg.protectedNames[e.key]==true
+                local b=Instance.new("TextButton",list); b.Size=UDim2.new(1,-4,0,22); b.BackgroundColor3=protected and Color3.fromRGB(49,108,83) or Color3.fromRGB(38,42,51); b.BorderSizePixel=0; b.TextColor3=Color3.fromRGB(226,230,238); b.Font=Enum.Font.Gotham; b.TextSize=10; b.TextXAlignment=Enum.TextXAlignment.Left; b.Text=(protected and "✓ " or "   ")..e.name.."  •  "..e.rarity.." "..e.kind
+                b.MouseButton1Click:Connect(function() cfg.protectedNames[e.key]=not cfg.protectedNames[e.key] or nil; save(); renderList(); refresh() end)
+            end
+        end
+    end
+    listCount.Text=string.format("%d matches • showing up to 150 • click item to protect",matches)
+end
+search:GetPropertyChangedSignal("Text"):Connect(renderList)
+close.Text="×"; close.Size=UDim2.fromOffset(32,28); close.Position=UDim2.new(1,-38,0,7); close.MouseButton1Click:Connect(function() save(); gui:Destroy() end)
+
+local lastJob,lastPlace=game.JobId,game.PlaceId
+local busy=false
+local function autoSellNow()
+    if busy or not cfg.autoSell then return end
+    busy=true
+    local remote=select(1,remotes()); local inv=inventory()
+    if remote and inv then
+        local p,s=plan(inv)
+        if #s>0 then
+            local ok=pcall(function() remote:FireServer(p) end)
+            if ok then
+                task.wait(2)
+                local after=inventory()
+                if after then local _,still=plan(after); note.Text=string.format("Requested %d sale(s); %d still eligible after check.",#s,#still)
+                else note.Text="Sale request sent; inventory check unavailable." end
+            else note.Text="Sell request failed." end
+        else note.Text="Nothing matches current sale rules." end
+    end
+    busy=false; refresh()
+end
+task.spawn(function()
+    while gui.Parent do
+        task.wait(2)
+        if game.JobId~=lastJob or game.PlaceId~=lastPlace then
+            lastJob,lastPlace=game.JobId,game.PlaceId
+            if game.PlaceId==LOBBY_PLACE then task.delay(3,autoSellNow)
+            else
+                cfg.games=(tonumber(cfg.games) or 0)+1; save()
+                if cfg.autoSell and cfg.games>=math.clamp(tonumber(cfg.sellAfterGames) or 10,1,50) then cfg.games=0; save(); task.delay(5,autoSellNow) end
+            end
+        end
+    end
+end)
+renderList(); refresh(); save()
