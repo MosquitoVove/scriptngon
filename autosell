@@ -1,1 +1,523 @@
 
+-- Harvard Auto Sell — standalone integration
+-- Built from the inventory schema and protection rules in mosquitoautosell.txt,
+-- with Harvard's reload/plan/sell/verify flow. Review the game-specific payload
+-- before enabling: batch selling inside dungeons is not proven by the source files.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+while not player do task.wait(); player = Players.LocalPlayer end
+
+local LOBBY_PLACE_ID = 77649408247578
+local POWER_PER_UPGRADE = 10
+local CONFIG_FOLDER = "HarvardAutoSell"
+local CONFIG_FILE = CONFIG_FOLDER .. "/settings-" .. tostring(player.UserId) .. ".json"
+local CONFIG_KEY = "HarvardAutoSellConfig_" .. tostring(player.UserId)
+
+local function safeDecode(s)
+    if type(s) ~= "string" then return {} end
+    local ok, value = pcall(function() return HttpService:JSONDecode(s) end)
+    return ok and type(value) == "table" and value or {}
+end
+local function loadConfig()
+    if type(readfile) == "function" then
+        local ok, data = pcall(function() return readfile(CONFIG_FILE) end)
+        if ok then return safeDecode(data) end
+    end
+    return safeDecode(player:GetAttribute(CONFIG_KEY))
+end
+local saved = loadConfig()
+local cfg = {
+    auto = saved.auto == true,
+    scheduleMode = saved.scheduleMode == "maps" and "maps" or "seconds",
+    scheduleValue = math.clamp(tonumber(saved.scheduleValue) or 60, 1, 99999),
+    keepLevel = math.max(0, math.floor(tonumber(saved.keepLevel) or 0)),
+    abilityAmount = math.max(0, math.floor(tonumber(saved.abilityAmount) or 0)),
+    abilityNamesText = type(saved.abilityNamesText) == "string" and saved.abilityNamesText or "",
+    selected = type(saved.selected) == "table" and saved.selected or {},
+    keepRows = type(saved.keepRows) == "table" and saved.keepRows or {},
+    potentialRows = type(saved.potentialRows) == "table" and saved.potentialRows or {},
+    lastPlaceId = tonumber(saved.lastPlaceId),
+    dungeonCount = math.max(0, math.floor(tonumber(saved.dungeonCount) or 0)),
+}
+local rarities = {"common", "uncommon", "rare", "epic", "legendary", "ultimate"}
+for _, rarity in ipairs(rarities) do
+    if type(cfg.selected[rarity]) ~= "boolean" then cfg.selected[rarity] = false end
+end
+
+local function saveConfig()
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(cfg) end)
+    if not ok then return false end
+    pcall(function() player:SetAttribute(CONFIG_KEY, encoded) end)
+    if type(writefile) == "function" then
+        if type(isfolder) == "function" and type(makefolder) == "function" then
+            pcall(function() if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end end)
+        end
+        pcall(function() writefile(CONFIG_FILE, encoded) end)
+    end
+    return true
+end
+
+local function normalize(value)
+    local s = tostring(value or ""):lower()
+    return (s:match("^%s*(.-)%s*$") or "")
+end
+local function splitNames(s)
+    local out = {}
+    for line in (tostring(s or "") .. "\n"):gmatch("(.-)\n") do
+        local n = normalize(line)
+        if n ~= "" then out[n] = true end
+    end
+    return out
+end
+local function checkAbilityEquipped(item)
+    if type(item.equipped) == "table" then
+        for _, value in pairs(item.equipped) do if value == true then return true end end
+        return false
+    end
+    return item.equipped == true
+end
+local STAT_FIELDS = {
+    physical = {"physicalPower", "physicalDamage"},
+    spell = {"spellPower", "SpellPower", "spellDamage", "SpellDamage"},
+    total = {"maxUpgrades", "MaxUpgrades", "maximumUpgrades", "MaximumUpgrades", "totalUpgrades", "TotalUpgrades"},
+    used = {"currentUpgrade", "CurrentUpgrade", "currentUpgrades", "CurrentUpgrades", "upgradesUsed", "UpgradesUsed"},
+}
+local function readStat(item, fields)
+    for _, field in ipairs(fields) do
+        local raw = item[field]
+        if raw ~= nil then
+            local n = tonumber(raw)
+            if n and n == n and n >= 0 and n < math.huge then return n end
+            return nil
+        end
+    end
+    return nil
+end
+local function armorPotential(item, powerType)
+    local power = readStat(item, STAT_FIELDS[powerType])
+    local total = readStat(item, STAT_FIELDS.total)
+    local used = readStat(item, STAT_FIELDS.used)
+    if power == nil or total == nil or used == nil or used > total then return nil end
+    return power + (total - used) * POWER_PER_UPGRADE
+end
+local function nameMatches(item, target)
+    local n = normalize(target)
+    for _, field in ipairs({"name", "abilityName", "itemName", "gearName"}) do
+        if type(item[field]) == "string" and normalize(item[field]) == n and n ~= "" then return true end
+    end
+    return false
+end
+local function keepByNameRarity(item)
+    if type(item) ~= "table" then return false end
+    local name, rarity = normalize(item.name), normalize(item.rarity)
+    if name == "" or rarity == "" then return false end
+    for _, row in ipairs(cfg.keepRows) do
+        if normalize(row.name) == name and type(row.rarities) == "table" and row.rarities[rarity] == true then return true end
+    end
+    return false
+end
+local function potentialRule(item)
+    if type(item) ~= "table" then return false, true end
+    for _, row in ipairs(cfg.potentialRows) do
+        local n, threshold = normalize(row.name), tonumber(row.power)
+        if n ~= "" and threshold and threshold >= 0 and (row.type == "physical" or row.type == "spell") and nameMatches(item, n) then
+            local value = armorPotential(item, row.type)
+            if value == nil then return true, true end -- Unknown data means safe keep.
+            if value >= threshold then return true, false end
+        end
+    end
+    return false, false
+end
+
+local function scanInventory()
+    local remotes = ReplicatedStorage:FindFirstChild("remotes")
+    local reload = remotes and remotes:FindFirstChild("reloadInvy")
+    if not reload or not reload:IsA("RemoteFunction") then error("reloadInvy RemoteFunction was not found") end
+    local inventory = reload:InvokeServer()
+    if type(inventory) ~= "table" then error("Inventory response is not a table") end
+
+    local payload = {weapon = {}, helmet = {}, chest = {}, ability = {}}
+    local kept, sell = {}, {}
+    local abilityNames = splitNames(cfg.abilityNamesText)
+    local abilityCounts = {}
+    local function add(list, text, reason)
+        table.insert(list, text .. (reason and (" — " .. reason) or ""))
+    end
+    local function processGear(invKey, payloadKey, prefix)
+        local items = inventory[invKey]
+        if items ~= nil and type(items) ~= "table" then error("Inventory category invalid: " .. invKey) end
+        for key, item in pairs(items or {}) do
+            local text = type(item) == "table" and (tostring(item.name or key) .. " · " .. tostring(item.rarity or "?") .. " · Lv " .. tostring(item.levelReq or "?")) or tostring(key)
+            local reason
+            if type(item) ~= "table" then reason = "unrecognized item data"
+            elseif normalize(item.name) == "" then reason = "missing item name"
+            elseif item.equipped == true then reason = "equipped"
+            elseif item.equipped ~= false then reason = "unknown equipped status"
+            elseif keepByNameRarity(item) then reason = "keep by name + rarity"
+            else
+                local pkeep, unknown = potentialRule(item)
+                if pkeep then reason = unknown and "potential data unavailable (safe keep)" or "armor potential" end
+            end
+            if not reason and (type(item.rarity) ~= "string" or not cfg.selected[normalize(item.rarity)]) then reason = "rarity not selected" end
+            if not reason and cfg.keepLevel > 0 then
+                local level = tonumber(item.levelReq)
+                if level == nil then reason = "unknown level"
+                elseif level >= cfg.keepLevel then reason = "level " .. cfg.keepLevel .. "+" end
+            end
+            local id = type(key) == "string" and tonumber(key:match("^" .. prefix .. "_(%d+)$")) or nil
+            if not reason and not id then reason = "unknown item ID" end
+            if reason then add(kept, text, reason)
+            else table.insert(payload[payloadKey], id); add(sell, text) end
+        end
+    end
+    processGear("weapons", "weapon", "weapon")
+    processGear("helmets", "helmet", "helmet")
+    processGear("chests", "chest", "chest")
+
+    local abilities = {}
+    for key, item in pairs(inventory.abilities or {}) do
+        if type(item) == "table" then table.insert(abilities, {key = key, item = item}) end
+    end
+    table.sort(abilities, function(a, b) return tostring(a.key) < tostring(b.key) end)
+    for _, entry in ipairs(abilities) do
+        local key, item = entry.key, entry.item
+        local text = tostring(item.name or key) .. " · " .. tostring(item.rarity or "?") .. " · Lv " .. tostring(item.levelReq or "?")
+        local reason, forceSellReason
+        if checkAbilityEquipped(item) then reason = "equipped"
+        elseif keepByNameRarity(item) then reason = "keep by name + rarity"
+        else
+            local pkeep, unknown = potentialRule(item)
+            if pkeep then reason = unknown and "potential data unavailable (safe keep)" or "armor potential"
+            elseif cfg.abilityAmount > 0 then
+                local n = normalize(item.name)
+                if n == "" then forceSellReason = "missing ability name"
+                elseif next(abilityNames) ~= nil and not abilityNames[n] then forceSellReason = "ability not listed"
+                else
+                    local used = abilityCounts[n] or 0
+                    if used < cfg.abilityAmount then abilityCounts[n] = used + 1; reason = "keep ability quota"
+                    else forceSellReason = "ability quota exceeded" end
+                end
+            end
+        end
+        local id = type(key) == "string" and tonumber(key:match("^ability_(%d+)$")) or nil
+        if reason then add(kept, text, reason)
+        elseif forceSellReason then
+            if id then table.insert(payload.ability, id); add(sell, text, forceSellReason)
+            else add(kept, text, "unknown item ID") end
+        elseif not id then add(kept, text, "unknown item ID")
+        elseif type(item.rarity) ~= "string" then add(kept, text, "unknown rarity")
+        elseif cfg.selected[normalize(item.rarity)] then table.insert(payload.ability, id); add(sell, text)
+        else add(kept, text, "rarity not selected") end
+    end
+    local count = #payload.weapon + #payload.helmet + #payload.chest + #payload.ability
+    return {payload = payload, kept = kept, sell = sell, count = count, inventory = inventory}
+end
+
+local function payloadIds(payload)
+    local ids = {}
+    for key, list in pairs(payload) do for _, id in ipairs(list) do ids[key .. "_" .. tostring(id)] = true end end
+    return ids
+end
+local function inventoryStillContains(inv, ids)
+    local found = 0
+    for _, pair in ipairs({{"weapons", "weapon"}, {"helmets", "helmet"}, {"chests", "chest"}, {"abilities", "ability"}}) do
+        for key, item in pairs(inv[pair[1]] or {}) do
+            local id = type(key) == "string" and (pair[2] .. "_" .. tostring(key:match("^" .. pair[2] .. "_(%d+)$"))) or ""
+            if ids[id] then found = found + 1 end
+            if type(item) == "table" and type(item.UniqueItemID) == "string" and ids[item.UniqueItemID] then found = found + 1 end
+        end
+    end
+    return found
+end
+
+-- UI
+local playerGui = player:WaitForChild("PlayerGui")
+local old = playerGui:FindFirstChild("HarvardAutoSellGUI")
+if old then old:Destroy() end
+local gui = Instance.new("ScreenGui")
+gui.Name = "HarvardAutoSellGUI"; gui.ResetOnSpawn = false; gui.Parent = playerGui
+local function make(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+local bg = Color3.fromRGB(24, 27, 35)
+local card = Color3.fromRGB(38, 43, 55)
+local ink = Color3.fromRGB(238, 241, 248)
+local muted = Color3.fromRGB(164, 174, 193)
+local blue = Color3.fromRGB(62, 112, 218)
+local green = Color3.fromRGB(53, 147, 102)
+local red = Color3.fromRGB(161, 69, 69)
+local frame = make("Frame", {Size = UDim2.fromOffset(540, 650), Position = UDim2.new(.5, -270, .5, -325), BackgroundColor3 = bg, BorderSizePixel = 0}, gui)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, frame)
+make("UIStroke", {Color = Color3.fromRGB(65, 73, 91), Thickness = 1}, frame)
+make("TextLabel", {Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -120, 0, 32), BackgroundTransparency = 1, Text = "Harvard Auto Sell · Safe Batch", TextColor3 = ink, TextSize = 17, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left}, frame)
+local close = make("TextButton", {Position = UDim2.new(1, -42, 0, 8), Size = UDim2.fromOffset(30, 28), BackgroundColor3 = card, Text = "×", TextColor3 = ink, TextSize = 18, Font = Enum.Font.GothamBold}, frame)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, close)
+local content = make("ScrollingFrame", {Position = UDim2.fromOffset(12, 46), Size = UDim2.new(1, -24, 1, -58), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, CanvasSize = UDim2.new()}, frame)
+local layout = make("UIListLayout", {Padding = UDim.new(0, 7), SortOrder = Enum.SortOrder.LayoutOrder}, content)
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() content.CanvasSize = UDim2.fromOffset(0, layout.AbsoluteContentSize.Y + 12) end)
+local function label(text, height, color, bold)
+    return make("TextLabel", {Size = UDim2.new(1, -4, 0, height or 22), BackgroundTransparency = 1, Text = text, TextColor3 = color or ink, TextSize = 12, Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center}, content)
+end
+local function button(text, width, color)
+    local b = make("TextButton", {Size = UDim2.new(0, width, 0, 30), BackgroundColor3 = color or card, Text = text, TextColor3 = ink, TextSize = 12, Font = Enum.Font.GothamMedium}, content)
+    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
+    return b
+end
+local function textbox(text, width)
+    local b = make("TextBox", {Size = UDim2.new(0, width, 0, 30), BackgroundColor3 = card, Text = text, PlaceholderText = "value", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, content)
+    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
+    return b
+end
+local function row()
+    return make("Frame", {Size = UDim2.new(1, -2, 0, 32), BackgroundTransparency = 1}, content)
+end
+local function rowButton(parent, text, x, width, color)
+    local b = make("TextButton", {Position = UDim2.fromOffset(x, 0), Size = UDim2.fromOffset(width, 30), BackgroundColor3 = color or card, Text = text, TextColor3 = ink, TextSize = 11, Font = Enum.Font.GothamMedium}, parent)
+    make("UICorner", {CornerRadius = UDim.new(0, 6)}, b)
+    return b
+end
+
+label("Auto Sell starts OFF on first run. Preview does not sell anything.", 28, muted)
+local autoButton = button(cfg.auto and "Auto Sell: ON" or "Auto Sell: OFF", 160, cfg.auto and green or card)
+local modeRow = row()
+local secondsButton = rowButton(modeRow, "Every seconds", 0, 125, cfg.scheduleMode == "seconds" and blue or card)
+local mapsButton = rowButton(modeRow, "Every dungeon maps", 132, 145, cfg.scheduleMode == "maps" and blue or card)
+local scheduleRow = row()
+local scheduleLabel = make("TextLabel", {Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(170, 30), BackgroundTransparency = 1, Text = "Interval (seconds)", TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left}, scheduleRow)
+local scheduleBox = make("TextBox", {Position = UDim2.fromOffset(174, 0), Size = UDim2.fromOffset(100, 30), BackgroundColor3 = card, Text = tostring(cfg.scheduleValue), TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, scheduleRow)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, scheduleBox)
+local previewButton = button("Preview inventory", 155, blue)
+local sellNowButton = button("Sell once now", 135, card)
+label("Sell rarity filters (selected rarities can be sold)", 22, muted, true)
+local rarityRow = row()
+local rarityButtons = {}
+for i, rarity in ipairs(rarities) do
+    local x = (i - 1) * 86
+    local b = rowButton(rarityRow, (cfg.selected[rarity] and "✓ " or "○ ") .. rarity, x, 82, cfg.selected[rarity] and blue or card)
+    rarityButtons[rarity] = b
+end
+label("Keep level: items at this level or higher are protected (0 disables)", 25, muted)
+local levelBox = textbox(tostring(cfg.keepLevel), 100)
+label("Ability quota: keep N of each named ability; 0 disables. Optional names: one per line.", 32, muted)
+local abilityRow = row()
+local abilityAmountBox = make("TextBox", {Size = UDim2.fromOffset(100, 30), BackgroundColor3 = card, Text = tostring(cfg.abilityAmount), TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ClearTextOnFocus = false}, abilityRow)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, abilityAmountBox)
+local abilityNamesBox = make("TextBox", {Position = UDim2.fromOffset(108, 0), Size = UDim2.new(1, -108, 0, 56), BackgroundColor3 = card, Text = cfg.abilityNamesText, PlaceholderText = "Ability name 1\nAbility name 2", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, abilityRow)
+abilityRow.Size = UDim2.new(1, -2, 0, 58); make("UICorner", {CornerRadius = UDim.new(0, 6)}, abilityNamesBox)
+label("Keep exact item name + rarity (one rule per line: Item Name | rarity,rarity)", 30, muted, true)
+local keepBox = make("TextBox", {Size = UDim2.new(1, -4, 0, 60), BackgroundColor3 = card, Text = "", PlaceholderText = "Example Sword | legendary,ultimate", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, content)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, keepBox)
+label("Armor potential rules (one per line: Item Name | physical/spell | threshold). Missing stat data safely keeps the item.", 34, muted, true)
+local potentialBox = make("TextBox", {Size = UDim2.new(1, -4, 0, 60), BackgroundColor3 = card, Text = "", PlaceholderText = "Example Armor | physical | 100", TextColor3 = ink, PlaceholderColor3 = muted, TextSize = 11, Font = Enum.Font.Gotham, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, ClearTextOnFocus = false, MultiLine = true}, content)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, potentialBox)
+local status = label("Ready. Auto Sell is " .. (cfg.auto and "ON" or "OFF") .. ".", 32, muted)
+local results = make("TextLabel", {Size = UDim2.new(1, -4, 0, 100), BackgroundColor3 = card, Text = "Preview results will appear here.", TextColor3 = ink, TextSize = 11, Font = Enum.Font.Code, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true}, content)
+make("UICorner", {CornerRadius = UDim.new(0, 6)}, results)
+
+local function parseKeepRows()
+    local out = {}
+    for line in (keepBox.Text .. "\n"):gmatch("(.-)\n") do
+        local name, list = line:match("^%s*(.-)%s*|%s*(.-)%s*$")
+        if name and name ~= "" then
+            local rs = {}
+            for rarity in list:gmatch("[^,]+") do rs[normalize(rarity)] = true end
+            table.insert(out, {name = name, rarities = rs})
+        end
+    end
+    return out
+end
+local function parsePotentialRows()
+    local out = {}
+    for line in (potentialBox.Text .. "\n"):gmatch("(.-)\n") do
+        local name, kind, threshold = line:match("^%s*(.-)%s*|%s*(.-)%s*|%s*(.-)%s*$")
+        kind = normalize(kind)
+        if name and name ~= "" and (kind == "physical" or kind == "spell") and tonumber(threshold) and tonumber(threshold) >= 0 then
+            table.insert(out, {name = name, type = kind, power = tostring(threshold)})
+        end
+    end
+    return out
+end
+local function syncFromUI()
+    local value = tonumber(scheduleBox.Text)
+    local level = tonumber(levelBox.Text)
+    local amount = tonumber(abilityAmountBox.Text)
+    if not value or value < 1 or value % 1 ~= 0 or not level or level < 0 or level % 1 ~= 0 or not amount or amount < 0 or amount % 1 ~= 0 then
+        return false, "Enter whole numbers: schedule ≥ 1, keep level ≥ 0, ability quota ≥ 0."
+    end
+    cfg.scheduleValue = value; cfg.keepLevel = level; cfg.abilityAmount = amount
+    cfg.abilityNamesText = abilityNamesBox.Text
+    cfg.keepRows = parseKeepRows(); cfg.potentialRows = parsePotentialRows()
+    saveConfig()
+    return true
+end
+local function updateModeUI()
+    secondsButton.BackgroundColor3 = cfg.scheduleMode == "seconds" and blue or card
+    mapsButton.BackgroundColor3 = cfg.scheduleMode == "maps" and blue or card
+    scheduleLabel.Text = cfg.scheduleMode == "seconds" and "Interval (seconds)" or "Every N dungeon maps"
+end
+local function updateRarityUI()
+    for rarity, b in pairs(rarityButtons) do
+        b.Text = (cfg.selected[rarity] and "✓ " or "○ ") .. rarity
+        b.BackgroundColor3 = cfg.selected[rarity] and blue or card
+    end
+end
+local function refreshTextRules()
+    local keepLines, potentialLines = {}, {}
+    for _, r in ipairs(cfg.keepRows) do
+        local rs = {}
+        for rarity, yes in pairs(r.rarities or {}) do if yes then table.insert(rs, rarity) end end
+        table.sort(rs)
+        table.insert(keepLines, tostring(r.name) .. " | " .. table.concat(rs, ","))
+    end
+    for _, r in ipairs(cfg.potentialRows) do table.insert(potentialLines, tostring(r.name) .. " | " .. tostring(r.type) .. " | " .. tostring(r.power)) end
+    keepBox.Text = table.concat(keepLines, "\n")
+    potentialBox.Text = table.concat(potentialLines, "\n")
+end
+refreshTextRules(); updateModeUI(); updateRarityUI()
+
+local busy = false
+local lastSellAt = 0
+local lastMapTrigger = cfg.dungeonCount
+local lastPlaceId = cfg.lastPlaceId
+local function preview(doSell)
+    if busy then return false, "A sale/preview is already running." end
+    local ok, message = syncFromUI()
+    if not ok then status.Text = message; return false, message end
+    busy = true
+    status.Text = "Reading inventory…"
+    local success, plan = pcall(scanInventory)
+    if not success then busy = false; status.Text = "Inventory error: " .. tostring(plan); return false, tostring(plan) end
+    local lines = {"WOULD SELL: " .. #plan.sell, "WOULD KEEP: " .. #plan.kept}
+    for i = 1, math.min(#plan.sell, 24) do table.insert(lines, "SELL  " .. plan.sell[i]) end
+    if #plan.sell > 24 then table.insert(lines, "… and " .. (#plan.sell - 24) .. " more") end
+    for i = 1, math.min(#plan.kept, 16) do table.insert(lines, "KEEP  " .. plan.kept[i]) end
+    if #plan.kept > 16 then table.insert(lines, "… and " .. (#plan.kept - 16) .. " more") end
+    results.Text = table.concat(lines, "\n")
+    if not doSell or plan.count == 0 then
+        status.Text = doSell and "Nothing matched the sell rules." or "Preview complete — nothing was sold."
+        busy = false
+        return true, plan
+    end
+    if cfg.auto ~= true and doSell then
+        status.Text = "Auto Sell is OFF. Turn it ON to allow selling."
+        busy = false
+        return false, "Auto Sell is OFF"
+    end
+    local remotes = ReplicatedStorage:FindFirstChild("remotes")
+    local sellRemote = remotes and remotes:FindFirstChild("sellItemEvent")
+    local reload = remotes and remotes:FindFirstChild("reloadInvy")
+    if not sellRemote or not sellRemote:IsA("RemoteEvent") or not reload then
+        busy = false; status.Text = "Sell remote or inventory remote missing."; return false, "remote missing"
+    end
+    -- IMPORTANT: one batch FireServer call for all filtered items, including in dungeons.
+    local sent, sendErr = pcall(function() sellRemote:FireServer(plan.payload) end)
+    if not sent then busy = false; status.Text = "Batch send failed: " .. tostring(sendErr); return false, tostring(sendErr) end
+    task.wait(2)
+    local verifyOk, after = pcall(function() return reload:InvokeServer() end)
+    if not verifyOk or type(after) ~= "table" then
+        status.Text = ("Sent one batch for %d items; verification inventory unavailable."):format(plan.count)
+        busy = false; return true, "verification unavailable"
+    end
+    local ids = payloadIds(plan.payload)
+    local remaining = inventoryStillContains(after, ids)
+    local gone = math.max(0, plan.count - remaining)
+    status.Text = ("Batch requested %d; verified missing from inventory: %d. Check the game result if this differs."):format(plan.count, gone)
+    lastSellAt = os.clock()
+    busy = false
+    saveConfig()
+    return true, plan
+end
+
+local function setAuto(value)
+    if value and not cfg.auto then
+        local ok, plan = preview(false)
+        if not ok then return end
+        local confirm = make("Frame", {Size = UDim2.fromOffset(360, 170), Position = UDim2.new(.5, -180, .5, -85), BackgroundColor3 = bg, ZIndex = 20}, gui)
+        make("UICorner", {CornerRadius = UDim.new(0, 10)}, confirm)
+        make("TextLabel", {Position = UDim2.fromOffset(14, 12), Size = UDim2.new(1, -28, 0, 76), BackgroundTransparency = 1, Text = "Preview ready. This enables automatic selling on the selected schedule. The batch payload in dungeons is not confirmed by the source files. Enable Auto Sell?", TextWrapped = true, TextColor3 = ink, TextSize = 12, Font = Enum.Font.Gotham, ZIndex = 21}, confirm)
+        local yes = make("TextButton", {Position = UDim2.fromOffset(14, 112), Size = UDim2.fromOffset(150, 34), BackgroundColor3 = green, Text = "Confirm ON", TextColor3 = ink, TextSize = 12, ZIndex = 21}, confirm)
+        local no = make("TextButton", {Position = UDim2.fromOffset(190, 112), Size = UDim2.fromOffset(150, 34), BackgroundColor3 = card, Text = "Cancel", TextColor3 = ink, TextSize = 12, ZIndex = 21}, confirm)
+        yes.MouseButton1Click:Once(function()
+            cfg.auto = true; saveConfig(); autoButton.Text = "Auto Sell: ON"; autoButton.BackgroundColor3 = green; status.Text = "Auto Sell ON. Config saved."; confirm:Destroy()
+        end)
+        no.MouseButton1Click:Once(function() confirm:Destroy() end)
+        return
+    end
+    cfg.auto = value == true
+    autoButton.Text = cfg.auto and "Auto Sell: ON" or "Auto Sell: OFF"
+    autoButton.BackgroundColor3 = cfg.auto and green or card
+    saveConfig()
+    status.Text = "Auto Sell " .. (cfg.auto and "ON" or "OFF") .. ". Configuration saved."
+end
+
+for rarity, b in pairs(rarityButtons) do
+    b.MouseButton1Click:Connect(function()
+        cfg.selected[rarity] = not cfg.selected[rarity]
+        updateRarityUI(); saveConfig()
+    end)
+end
+secondsButton.MouseButton1Click:Connect(function() cfg.scheduleMode = "seconds"; updateModeUI(); saveConfig() end)
+mapsButton.MouseButton1Click:Connect(function() cfg.scheduleMode = "maps"; updateModeUI(); saveConfig() end)
+autoButton.MouseButton1Click:Connect(function() setAuto(not cfg.auto) end)
+previewButton.MouseButton1Click:Connect(function() preview(false) end)
+sellNowButton.MouseButton1Click:Connect(function()
+    if not cfg.auto then status.Text = "Turn Auto Sell ON first; preview remains available while OFF."; return end
+    preview(true)
+end)
+close.MouseButton1Click:Connect(function() saveConfig(); gui:Destroy() end)
+for _, box in ipairs({scheduleBox, levelBox, abilityAmountBox, abilityNamesBox, keepBox, potentialBox}) do
+    box.FocusLost:Connect(function() local ok, err = syncFromUI(); if not ok then status.Text = err end end)
+end
+
+-- Restore the enabled state after teleport/re-execution through persisted config.
+-- A new run with no config is OFF. Count a dungeon entry only when place changes.
+local currentPlace = game.PlaceId
+if lastPlaceId and lastPlaceId ~= currentPlace and currentPlace ~= LOBBY_PLACE_ID then
+    cfg.dungeonCount = cfg.dungeonCount + 1
+    saveConfig()
+end
+cfg.lastPlaceId = currentPlace
+saveConfig()
+local startedAt = os.clock()
+local nextMapCount = cfg.dungeonCount + math.max(1, math.floor(cfg.scheduleValue))
+local wasDungeon = currentPlace ~= LOBBY_PLACE_ID
+local lastObservedPlace = currentPlace
+
+task.spawn(function()
+    while gui.Parent do
+        task.wait(1)
+        if not gui.Parent then break end
+        local place = game.PlaceId
+        if place ~= lastObservedPlace then
+            if place ~= LOBBY_PLACE_ID then
+                cfg.dungeonCount = cfg.dungeonCount + 1
+                if cfg.scheduleMode == "maps" and cfg.dungeonCount >= nextMapCount then
+                    nextMapCount = cfg.dungeonCount + math.max(1, math.floor(cfg.scheduleValue))
+                    if cfg.auto then task.spawn(function() preview(true) end) end
+                end
+            end
+            lastObservedPlace = place; cfg.lastPlaceId = place; saveConfig()
+        end
+        if cfg.auto and cfg.scheduleMode == "seconds" and not busy and os.clock() - math.max(startedAt, lastSellAt) >= cfg.scheduleValue then
+            startedAt = os.clock()
+            task.spawn(function() preview(true) end)
+        end
+    end
+end)
+
+-- Save on exit/teleport; ON/OFF and schedule persist for the next execution.
+player.OnTeleport:Connect(function()
+    cfg.lastPlaceId = game.PlaceId
+    saveConfig()
+end)
+game:BindToClose(function() cfg.lastPlaceId = game.PlaceId; saveConfig() end)
+
+status.Text = cfg.auto and "Auto Sell restored ON. Preview first; selling follows saved schedule." or "Ready. Auto Sell is OFF; preview is safe."
