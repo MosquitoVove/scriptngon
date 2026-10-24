@@ -1,287 +1,452 @@
--- Harvard Auto Sell + Item List - standalone
--- Item catalog is extracted from Harvard's inventoryAutomation component.
--- No Mosquito Auto Sell code is included. Review and test carefully before use.
+local source = [====[
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
-local LOBBY_PLACE_ID = 77649408247578
-local CONFIG_FILE = "HarvardAutoSellStandalone_" .. tostring(player.UserId) .. ".json"
+while not player do task.wait(); player = Players.LocalPlayer end
+local playerGui = player:WaitForChild("PlayerGui")
+local old = playerGui:FindFirstChild("ItemSellerGUI")
+if old then old:Destroy() end
 
-local rawCatalog = {
-    "Abyssal Skewers|w|n|1|s",
-    "Abyssal Spellscythe|w|n|1|s",
-    "Abyssal Talons|w|n|1|p",
-    "Abyssal Warhammers|w|n|1|p",
-    "Adventurer's Staff|w|n|0|s",
-    "Adventurer's Sword|w|n|0|p",
-    "Agony Orbs|a|e|7|d",
-    "Akuma Guardian Armor|c|n|22|g",
-    "Akuma Guardian Helmet|h|n|22|g",
-    "Akuma Mage Cloak|h|n|22|m",
-    "Akuma Mage Robes|c|n|22|m",
-    "Akuma Warrior Armor|c|n|22|w",
-    "Akuma Warrior Helmet|h|n|22|w",
-    "Akuma's Soulreaver|w|l|22|s",
-    "Akuma's Wraithbringer|w|l|22|p",
-    "Alien Guardian Armor|c|n|12|g",
-    "Alien Guardian Helmet|h|n|12|g",
-    "Alien Mage Armor|c|n|12|m",
-    "Alien Mage Helmet|h|n|12|m",
-    "Alien Warrior Armor|c|n|12|w",
-    "Alien Warrior Helmet|h|n|12|w",
-    "Amethyst Beams|a|e|9|d",
-    "Amethyst Blast|a|e|19|d",
-    "Amethyst Crescent Spellblade|w|n|15|s",
-    "Amethyst Spelldagger|w|n|15|s",
-    "Amethyst Spellscythe|w|n|17|s",
-    "Ancestral Guardian Armor|c|n|15|g",
-    "Ancestral Guardian Helmet|h|n|15|g",
-    "Ancestral Mage Armor|c|n|15|m",
-    "Ancestral Mage Hood|h|n|15|m",
-    "Ancestral Warrior Armor|c|n|15|w",
-    "Ancestral Warrior Helmet|h|n|15|w",
-    "Ancient Elder Staff|w|n|18|s",
-    "Ancient Lava Axe|w|n|19|s",
-    "Ancient Plate Armor|c|n|21|g",
-    "Ancient Plate Helmet|h|n|21|g",
-    "Ancient Ruins Greatsword|w|n|3|p",
-    "Angelic Plate Armor|c|n|13|m",
-    "Angelic Plate Helmet|h|n|13|m",
-    "Angelic Staff|w|n|13|s",
-    "Apothecary Staff|w|n|10|s",
-    "Apprentice Staff|w|n|5|s",
-    "Aquatic Defender|w|n|2|s",
-    "Aquatic Executioner|w|n|2|p",
-    "Aquatic Guardian Armor|c|n|2|g",
-    "Aquatic Guardian Helmet|h|n|2|g",
-    "Aquatic Mage Armor|c|n|2|m",
-    "Aquatic Mage Helmet|h|n|2|m",
-    "Aquatic Scimitars|w|n|2|p",
-    "Aquatic Smite|a|e|2|d",
-    "Aquatic Spear|w|n|2|p",
-    "Aquatic Warrior Armor|c|n|2|w",
-    "Aquatic Warrior Helmet|h|n|2|w",
-    "Arc Blast|a|e|0|d",
-    "Arc Wave|a|e|0|d",
-    "Arcane Amplifier|a|e|1|f",
-    "Arcane Barrage|a|u|20|d",
-    "Arcane Greatstaff|w|n|20|s",
-    "Arcane Orb Staff|w|n|13|s",
-    "Arcane Spray|a|u|4|d",
-    "Arch-Mage_Crown|h|n|10|m",
-    "Arch-Mage_Robes|c|n|10|m",
-    "Arclight Battlestaff|w|n|10|s",
-    "Arrow Barrage|a|e|16|d",
-    "Arrow Rain|a|r|16|d",
-    "Aura of Life|a|u|20|h",
-    "Azerite Greatstaff|w|n|20|s",
-    "Banished Greatsword|w|n|3|p",
-    "Barbaric_Guardian_Armor|c|n|10|g",
-    "Barbaric_Guardian_Helmet|h|n|10|g",
-    "Barbaric_Mage_Crown|h|n|10|m",
-    "Barbaric_Mage_Robes|c|n|10|m",
-    "Barbaric_Warrior_Armor|c|n|10|w",
-    "Barbaric_Warrior_Helmet|h|n|10|w",
-    "Battle Shout|a|u|4|b",
-    "Beast Cleaver|w|n|10|p",
-    "Beastly_Guardian_Armor|c|n|10|g",
-    "Beastly_Guardian_Helmet|h|n|10|g",
-    "Beastly_Warrior_Armor|c|n|10|w",
-    "Beastly_Warrior_Helmet|h|n|10|w",
-    "Beastmaster Spell Scythe|w|l|10|s",
-    "Beastmaster War Scythe|w|l|10|p",
-    "Berserk|a|e|15|d",
-    "Bioforged Cog Spellblade|w|n|3|s",
-    "Bioforged Greataxe|w|n|16|p",
-    "Bioforged Greatsword|w|n|16|p",
-    "Bioforged Quickblade|w|n|3|p",
-    "Bioforged Reinforced Slicer|w|n|16|p",
-    "Blacksteel Greatsword|w|n|18|p",
-    "Blade Barrage|a|e|9|d",
-    "Blade Fall|a|e|19|d",
-    "Blade Revolver|a|e|17|d",
-    "Blade Storm|a|e|17|d",
-    "Blade Throw|a|e|10|d",
-    "Blazing Star|w|n|12|p",
-    "Blessed Lightpost|w|n|3|s",
-    "Blood Pact|a|e|1|g",
-    "Bloodthirster|w|n|17|p",
-    "Blue Fireball|a|c|4|d",
-    "Blue Wizard Hat|h|n|5|m",
-    "Blue Wizard Robes|c|n|5|m",
-    "Bluefire Staff|w|n|20|s",
-    "Bone Scythe|w|n|15|p",
-    "Bronze Dagger|w|n|5|p",
-    "Bronze Longsword|w|n|5|p",
-    "Burned Guardian Armor|c|n|19|g",
-    "Burned Guardian Helmet|h|n|19|g",
-    "Burned Mage Armor|c|n|19|m",
-    "Burned Mage Helmet|h|n|19|m",
-    "Burned Warrior Armor|c|n|19|w",
-    "Burned Warrior Helmet|h|n|19|w",
-    "Captain's Anchor|w|n|8|p",
-    "Carrot Barrage|a|r|6|d",
-    "Celestial Fire Staff|w|n|10|s",
-    "Chain Heal|a|r|10|h",
-    "Chain Lightning|a|e|16|d",
-    "Chain Phase Shock|a|n|14|d",
-    "Chain Storm|a|e|22|d",
-    "Chained Energy Blasts|a|r|16|d",
-    "Champion's Destiny|w|l|0|p",
-    "Champion's Fury|w|l|0|p",
-    "Champion's Judgement|w|l|0|p",
-    "Champion's Oath|w|l|0|p",
-    "Chromatic Rain|a|e|16|d",
-    "Cleansing Beam|a|e|1|",
-    "Coldstone Axes|w|n|20|p",
-    "Coldstone Blades|w|n|20|s",
-    "Coldstone Cleaver|w|n|20|p",
-    "Coldstone Glaive|w|n|20|p",
-    "Coldstone Greatstaff|w|n|20|s",
-    "Coldstone Spellscythe|w|n|20|s",
-    "Coldstone Sword|w|n|20|p",
-    "Commander's Guardian Armor|c|n|12|g",
-    "Commander's Guardian Helmet|h|n|12|g",
-    "Commander's Mage Armor|c|n|12|m",
-    "Commander's Mage Helmet|h|n|12|m",
-    "Commander's Warrior Armor|c|n|12|w",
-    "Commander's Warrior Helmet|h|n|12|w",
-    "Cracked Tooth Cleaver|w|n|8|p",
-    "Crimson Kris|w|n|15|p",
-    "Crimson Spellblade|w|n|20|s",
-    "Crusader Armor|c|n|5|g",
-    "Crusader Helmet|h|n|5|g",
-    "Crystalized Greatsword|w|l|20|p",
-    "Crystalline Cannon|a|e|7|d",
-    "Crystalline Guardian Armor|c|n|7|g",
-    "Crystalline Guardian Helmet|h|n|7|g",
-    "Crystalline Mage Armor|c|n|7|m",
-    "Crystalline Mage Helmet|h|n|7|m",
-    "Crystalline Shard Staff|w|n|7|s",
-    "Crystalline Warrior Armor|c|n|7|w",
-    "Crystalline Warrior Helmet|h|n|7|w",
-    "Cultist Blade|w|n|13|p",
-    "Dark Ice Blades|w|n|17|p",
-    "Dark Priest Staff|w|n|13|s",
-    "Darkstone Greatsword|w|n|19|p",
-    "Daybreak And Gildensong|w|l|9|s",
-    "Demon Lord's Greatstaff|w|n|18|s",
-    "Demonic Curse|a|e|12|d",
-    "Demonic Greatsword|w|n|20|p",
-    "Demonic Spellblade|w|n|20|s",
-    "Demonic Spikes|a|r|18|d",
-    "Demonic Strike|a|r|13|d",
-    "Desert Fury|w|l|5|p",
-    "Desert Mirage|w|l|4|s",
-    "Desert Wrath|w|l|4|p",
-    "Devilish Greataxe|w|n|13|p",
-    "Diamond Encrusted Blade|w|n|20|p",
-    "Dracani Flanged Mace|w|n|9|p",
-    "Dracani Gilded Lance|w|n|9|s",
-    "Dracani Gilded Staff|w|n|9|s",
-    "Dracani Gilded Sword|w|n|9|p",
-    "Dracani Guardian Armor|c|n|9|g",
-    "Dracani Guardian Helmet|h|n|9|g",
-    "Dracani Mage Armor|c|n|9|m",
-    "Dracani Mage Helmet|h|n|9|m",
-    "Dracani Royal Glaive|w|n|9|p",
-    "Dracani Spellclaws|w|n|9|s",
-    "Dracani Warrior Armor|c|n|9|w",
-    "Dracani Warrior Helmet|h|n|9|w",
-    "Dragon Slayer Blade|w|n|20|p",
-    "Dragon's Claw Scythe|w|n|18|s",
-    "Dual Ancient Daggers|w|n|18|p",
-    "Dual Arcane Slicers|w|n|17|s",
-    "Dual Arcane Spelldaggers|w|n|18|s",
-    "Dual Bioforged Drills|w|l|3|p",
-    "Dual Bioforged Spelldaggers|w|n|16|s",
-    "Dual Bladed Mage Daggers|w|n|8|s",
-    "Dual Crimson Daggers|w|n|17|p",
-    "Dual Crystalized Knives|w|n|12|p",
-    "Dual Cutlasses|w|n|10|p",
-    "Dual Elegant Mage Fans|w|n|15|s",
-    "Dual Fist Blades|w|n|19|p",
-    "Dual Flatblade Slicers|w|n|18|p",
-    "Dual Frozen Blades|w|n|10|p",
-    "Dual Fusion Blades|w|n|16|p",
-    "Dual Godforged Blades|w|l|3|p",
-    "Dual Hellfire Blades|w|n|19|s",
-    "Dual Hextech Spelldaggers|w|n|16|s",
-    "Dual Infernal Daggers|w|n|15|p",
-    "Dual Infernal Scimitars|w|n|17|p",
-    "Dual Inferno Slicers|w|n|10|p",
-    "Dual Jade Daggers|w|n|10|p",
-    "Dual Magma Fangs|w|n|17|p",
-    "Dual Magma Shields|w|n|19|s",
-    "Dual Nature Vines|w|n|3|s",
-    "Dual Ocean Fists|w|n|8|s",
-    "Dual Phantom Axes|w|n|8|p",
-    "Dual Phantom Daggers|w|n|8|p",
-    "Dual Phantom Defenders|w|n|8|s",
-    "Dual Phoenix Daggers|w|l|18|p",
-    "Dual Pirate Cutlasses|w|n|8|p",
-    "Dual Razor Slicers|w|n|17|p",
-    "Dual Royal Axes|w|n|10|p",
-    "Dual Samurai Sickles|w|n|15|p",
-    "Dual Samurai Stars|w|n|15|p",
-    "Dual Sapphire Slicers|w|n|18|p",
-    "Dual Serrated Knives|w|n|8|p",
-    "Dual Sinister Blades|w|n|3|p",
-    "Dual Solar Blades|w|n|12|p",
-    "Dual Toxic Daggers|w|n|8|s",
-    "Eagle Staff|w|n|10|s",
-    "Earth Clap|a|r|15|d",
-    "Earth Kick|a|u|17|d",
-    "Earth Maul|w|n|3|p",
-    "Earth Spikes|a|u|8|d",
-    "Earth Staff|w|n|3|s",
-    "Earth Wand|w|n|13|s",
-    "Easter Guardian Armor|c|e|6|g",
-    "Easter Guardian Helmet|h|e|6|g",
-    "Easter Mage Armor|c|e|6|m",
-    "Easter Mage Helmet|h|e|6|m",
-    "Easter Warrior Armor|c|e|6|w",
-    "Easter Warrior Helmet|h|e|6|w",
-    "Egg Bomb|a|r|6|d",
-    "Egg Maul|w|e|6|p",
-    "Egg Staff|w|e|6|s",
-    "Eldenbark Greatstaff|w|l|7|s",
-    "Eldenbark Greatsword|w|l|7|p",
-    "Eldenbark Guardian Armor|c|n|7|g",
-    "Eldenbark Guardian Helmet|h|n|7|g",
-    "Eldenbark Mage Armor|c|n|7|m",
-    "Eldenbark Mage Helmet|h|n|7|m",
-    "Eldenbark Warrior Armor|c|n|7|w",
-    "Eldenbark Warrior Helmet|h|n|7|w",
-    "Elder Void Wand|w|n|20|s",
-    "Eldritch Cleavers|w|n|1|p",
-    "Eldritch Guardian Armor|c|n|1|g",
-    "Eldritch Guardian Helmet|h|n|1|g",
-    "Eldritch Mace|w|n|1|s",
-    "Eldritch Mage Armor|c|n|1|m",
-    "Eldritch Mage Helmet|h|n|1|m",
-    "Eldritch Trident|w|n|1|s",
-    "Eldritch War Lance|w|n|1|p",
-    "Eldritch Warrior Armor|c|n|1|w",
-    "Eldritch Warrior Helmet|h|n|1|w",
-    "Electric Boom|a|e|10|d",
-    "Electric Field|a|e|12|d",
-    "Electric Grinder|a|e|12|d",
-    "Electric Slash|a|r|17|d",
-    "Electron Spell Dagger|w|n|12|s",
-    "Elementalist Hood|h|n|5|m",
-    "Elementalist Robes|c|n|5|m",
-    "Elementalist Staff|w|n|17|s",
-    "Elite Ancient Plate Armor|c|n|21|g",
-    "Elite Ancient Plate Helmet|h|n|21|g",
-    "Elite Mage Plate Armor|c|n|21|m",
-    "Elite Mage Plate Helmet|h|n|21|m",
-    "Elite Warlord Plate Armor|c|n|21|w",
-    "Elite Warlord Plate Helmet|h|n|21|w",
-    "Elven Staff|w|n|10|s",
-    "Empowered Crystal Blade|w|n|13|p",
+local gui = Instance.new("ScreenGui")
+gui.Name = "ItemSellerGUI"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+local alive, auto, busy = true, false, false
+local revision = 0
+local teleporting = false
+local HttpService = game:GetService("HttpService")
+local SCRIPT_FILE = "item-seller-gui.lua"
+
+-- Store configs inside a dedicated executor Workspace folder.
+-- Each Roblox account gets its own settings file inside that folder.
+-- Example: workspace/MosquitoAutoSell/item-seller-settings-123456789.json
+local CONFIG_FOLDER = "MosquitoAutoSell"
+local userId = tostring(player.UserId)
+local SETTINGS_FILE = CONFIG_FOLDER .. "/item-seller-settings-" .. userId .. ".json"
+
+-- Create the config folder if the executor supports filesystem folders.
+if type(isfolder) == "function" and type(makefolder) == "function" then
+    if not isfolder(CONFIG_FOLDER) then
+        pcall(function() makefolder(CONFIG_FOLDER) end)
+    end
+end
+
+local saved = {}
+if type(readfile) == "function" then
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(SETTINGS_FILE)) end)
+    if ok and type(data) == "table" then saved = data end
+end
+-- Auto-sell is a persistent setting, just like the other GUI settings.
+local savedAuto = saved.auto == true
+local rarities = {"common", "uncommon", "rare", "epic", "legendary", "ultimate"}
+local selected = {common=false, uncommon=false, rare=false, epic=false, legendary=false, ultimate=false}
+local POWER_PER_UPGRADE = 10
+
+local connections = {}
+local function connect(signal, fn)
+    local c = signal:Connect(fn)
+    table.insert(connections, c)
+    return c
+end
+
+local function create(kind, props, parent)
+    local obj = Instance.new(kind)
+    for k,v in pairs(props) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+
+local bg = Color3.fromRGB(23,26,34)
+local card = Color3.fromRGB(35,40,51)
+local ink = Color3.fromRGB(235,239,247)
+local muted = Color3.fromRGB(159,170,190)
+local blue = Color3.fromRGB(65,117,220)
+local green = Color3.fromRGB(70,170,120)
+local red = Color3.fromRGB(150,64,64)
+
+local function label(parent, text, x,y,w,h,size)
+    return create("TextLabel", {
+        Text=text, Position=UDim2.fromOffset(x,y), Size=UDim2.new(w,0,0,h),
+        BackgroundTransparency=1, TextColor3=ink, Font=Enum.Font.Gotham,
+        TextSize=size or 13, TextXAlignment=Enum.TextXAlignment.Left
+    },parent)
+end
+
+local function button(parent,text,x,y,w,h)
+    local b = create("TextButton", {
+        Text=text, Position=UDim2.new(x,0,0,y), Size=UDim2.new(w,-6,0,h),
+        BackgroundColor3=card, BorderSizePixel=0, TextColor3=ink,
+        Font=Enum.Font.GothamMedium, TextSize=12
+    },parent)
+    create("UICorner",{CornerRadius=UDim.new(0,7)},b)
+    return b
+end
+
+local savedPosX = tonumber(saved.guiPosX) or 0.5
+local savedPosY = tonumber(saved.guiPosY) or 0.5
+
+-- Keep a sane base window size. The SIZE slider scales the entire GUI,
+-- so old oversized guiSizeX/guiSizeY values from previous test builds
+-- cannot make the window cover the whole screen.
+local BASE_W, BASE_H = 560, 520
+local MIN_SCALE, MAX_SCALE = 0.50, 0.90
+local savedScale = tonumber(saved.guiScale)
+if not savedScale then
+    local oldW = tonumber(saved.guiSizeX)
+    savedScale = oldW and math.clamp(oldW/BASE_W,MIN_SCALE,MAX_SCALE) or 0.78
+end
+savedScale = math.clamp(savedScale,MIN_SCALE,MAX_SCALE)
+
+local frame = create("Frame", {
+    AnchorPoint=Vector2.new(.5,.5), Position=UDim2.fromScale(savedPosX,savedPosY),
+    Size=UDim2.fromOffset(BASE_W,BASE_H), BackgroundColor3=bg, BorderSizePixel=0
+},gui)
+local guiScale = create("UIScale",{Scale=savedScale},frame)
+create("UICorner",{CornerRadius=UDim.new(0,12)},frame)
+
+
+local header = label(frame,"Item auto-seller",16,0,.60,44,17)
+header.Active = true
+local minimize = button(frame,"Hide",.66,8,.17,28)
+local close = button(frame,"Close",.84,8,.15,28)
+
+-- GUI SIZE: fixed in the top bar so it is always reachable.
+local sizeBar = create("Frame",{
+    Position=UDim2.fromOffset(12,42),Size=UDim2.new(1,-24,0,28),
+    BackgroundColor3=card,BorderSizePixel=0
+},frame)
+create("UICorner",{CornerRadius=UDim.new(0,7)},sizeBar)
+
+local sizeLabel = create("TextLabel",{
+    Position=UDim2.fromOffset(10,0),Size=UDim2.fromOffset(42,28),
+    BackgroundTransparency=1,Text="SIZE",TextColor3=muted,
+    Font=Enum.Font.GothamMedium,TextSize=10,
+    TextXAlignment=Enum.TextXAlignment.Left
+},sizeBar)
+
+local sizeTrack = create("Frame",{
+    Position=UDim2.fromOffset(50,10),Size=UDim2.new(1,-112,0,8),
+    BackgroundColor3=ink,BorderSizePixel=0
+},sizeBar)
+create("UICorner",{CornerRadius=UDim.new(0,4)},sizeTrack)
+
+local sizeFill = create("Frame",{
+    Position=UDim2.fromScale(0,0),Size=UDim2.fromScale(0,1),
+    BackgroundColor3=blue,BorderSizePixel=0
+},sizeTrack)
+create("UICorner",{CornerRadius=UDim.new(0,4)},sizeFill)
+
+local sizeKnob = create("TextButton",{
+    AnchorPoint=Vector2.new(.5,.5),Position=UDim2.fromScale(0,.5),
+    Size=UDim2.fromOffset(18,18),BackgroundColor3=ink,BorderSizePixel=0,
+    Text="",AutoButtonColor=false
+},sizeTrack)
+create("UICorner",{CornerRadius=UDim.new(1,0)},sizeKnob)
+
+local sizeValue = create("TextLabel",{
+    Position=UDim2.new(1,-54,0,0),Size=UDim2.fromOffset(48,28),
+    BackgroundTransparency=1,Text="",TextColor3=muted,
+    Font=Enum.Font.GothamMedium,TextSize=10,
+    TextXAlignment=Enum.TextXAlignment.Right
+},sizeBar)
+
+
+local restore = create("TextButton", {
+    Position=UDim2.new(saved.restorePosX or 0, saved.restorePosOffsetX or 16,
+        saved.restorePosY or 0, saved.restorePosOffsetY or 80),
+    Size=UDim2.fromOffset(190,40),
+    BackgroundColor3=card, BorderSizePixel=0, TextColor3=ink,
+    Font=Enum.Font.GothamMedium, TextSize=13, Text="Seller · OFF · Open"
+},gui)
+create("UICorner",{CornerRadius=UDim.new(0,9)},restore)
+
+local restoreMoved=false
+local function setMinimized(value)
+    frame.Visible=not value
+    restore.Visible=value
+end
+connect(minimize.MouseButton1Click,function() setMinimized(true) end)
+connect(restore.MouseButton1Click,function()
+    if restoreMoved then
+        restoreMoved=false
+        return
+    end
+    setMinimized(false)
+end)
+setMinimized(true)
+
+local body = create("ScrollingFrame",{
+    Position=UDim2.fromOffset(12,76), Size=UDim2.new(1,-24,1,-88),
+    BackgroundTransparency=1, BorderSizePixel=0, ScrollBarThickness=4,
+    CanvasSize=UDim2.fromOffset(0,0), AutomaticCanvasSize=Enum.AutomaticSize.Y,
+    ScrollingDirection=Enum.ScrollingDirection.Y
+},frame)
+
+label(body,"SELL RARITIES",0,0,1,22,12)
+local rarityButtons = {}
+for i,r in ipairs(rarities) do
+    rarityButtons[r] = button(body,"",((i-1)%3)/3,28+math.floor((i-1)/3)*36,1/3,30)
+end
+
+label(body,"KEEP BY NAME + RARITY",0,106,1,24,12)
+label(body,"Each row protects only the checked rarities. + adds a row; − removes it.",0,130,1,20,10).TextColor3=muted
+
+local keepRows={}
+local keepContainer=create("ScrollingFrame",{
+    Position=UDim2.fromOffset(0,154),Size=UDim2.new(1,-8,0,190),
+    BackgroundColor3=card,BorderSizePixel=0,ScrollBarThickness=5,
+    CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,
+    ScrollingDirection=Enum.ScrollingDirection.Y
+},body)
+create("UIPadding",{PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),PaddingTop=UDim.new(0,8),PaddingBottom=UDim.new(0,8)},keepContainer)
+create("UIListLayout",{Padding=UDim.new(0,7),SortOrder=Enum.SortOrder.LayoutOrder},keepContainer)
+
+local function rebuildKeepRows()
+    for _,child in ipairs(keepContainer:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    for index,row in ipairs(keepRows) do
+        local f=create("Frame",{
+            Size=UDim2.new(1,-4,0,62),BackgroundColor3=bg,BorderSizePixel=0,LayoutOrder=index
+        },keepContainer)
+        create("UICorner",{CornerRadius=UDim.new(0,7)},f)
+        row.frame=f
+        row.nameBox=create("TextBox",{
+            Position=UDim2.fromOffset(6,6),Size=UDim2.new(1,-86,0,25),
+            BackgroundColor3=card,BorderSizePixel=0,Text=row.name or "",
+            PlaceholderText="Item name",ClearTextOnFocus=false,TextColor3=ink,
+            Font=Enum.Font.Gotham,TextSize=11
+        },f)
+        create("UICorner",{CornerRadius=UDim.new(0,5)},row.nameBox)
+        local minus=create("TextButton",{
+            Position=UDim2.new(1,-78,0,6),Size=UDim2.fromOffset(32,25),
+            BackgroundColor3=card,BorderSizePixel=0,TextColor3=ink,
+            Font=Enum.Font.GothamBold,TextSize=15,Text="−"
+        },f)
+        local plus=create("TextButton",{
+            Position=UDim2.new(1,-40,0,6),Size=UDim2.fromOffset(32,25),
+            BackgroundColor3=blue,BorderSizePixel=0,TextColor3=ink,
+            Font=Enum.Font.GothamBold,TextSize=15,Text="+"
+        },f)
+        create("UICorner",{CornerRadius=UDim.new(0,5)},minus)
+        create("UICorner",{CornerRadius=UDim.new(0,5)},plus)
+        local width=1/#rarities
+        for i,r in ipairs(rarities) do
+            local b=create("TextButton",{
+                Position=UDim2.new((i-1)*width,2,0,36),Size=UDim2.new(width,-4,0,20),
+                BackgroundColor3=row.rarities[r] and blue or card,BorderSizePixel=0,
+                Text=(row.rarities[r] and "✓ " or "○ ")..r,TextColor3=ink,
+                Font=Enum.Font.GothamMedium,TextSize=9
+            },f)
+            create("UICorner",{CornerRadius=UDim.new(0,5)},b)
+            connect(b.MouseButton1Click,function()
+                row.rarities[r]=not row.rarities[r]
+                revision=revision+1;rebuildKeepRows();updateButtons()
+            end)
+        end
+        connect(row.nameBox:GetPropertyChangedSignal("Text"),function()
+            row.name=row.nameBox.Text;revision=revision+1;updateButtons()
+        end)
+        connect(plus.MouseButton1Click,function()
+            table.insert(keepRows,index+1,{name="",rarities={}})
+            rebuildKeepRows();revision=revision+1;updateButtons()
+        end)
+        connect(minus.MouseButton1Click,function()
+            if #keepRows<=1 then row.name="";row.rarities={} else table.remove(keepRows,index) end
+            rebuildKeepRows();revision=revision+1;updateButtons()
+        end)
+    end
+end
+table.insert(keepRows,{name="",rarities={}})
+
+label(body,"KEEP ARMOR BY POTENTIAL",0,358,1,24,12)
+label(body,"Potential = current power + remaining upgrades × 10.",0,382,1,20,10).TextColor3=muted
+
+local potentialRows={}
+local potentialContainer=create("ScrollingFrame",{
+    Position=UDim2.fromOffset(0,406),Size=UDim2.new(1,-8,0,170),
+    BackgroundColor3=card,BorderSizePixel=0,ScrollBarThickness=5,
+    CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,
+    ScrollingDirection=Enum.ScrollingDirection.Y
+},body)
+create("UIPadding",{PaddingLeft=UDim.new(0,8),PaddingRight=UDim.new(0,8),PaddingTop=UDim.new(0,8),PaddingBottom=UDim.new(0,8)},potentialContainer)
+create("UIListLayout",{Padding=UDim.new(0,7),SortOrder=Enum.SortOrder.LayoutOrder},potentialContainer)
+
+local function rebuildPotentialRows()
+    for _,child in ipairs(potentialContainer:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    for index,row in ipairs(potentialRows) do
+        local f=create("Frame",{
+            Size=UDim2.new(1,-4,0,54),BackgroundColor3=bg,BorderSizePixel=0,LayoutOrder=index
+        },potentialContainer)
+        create("UICorner",{CornerRadius=UDim.new(0,7)},f)
+        row.frame=f
+        row.nameBox=create("TextBox",{
+            Position=UDim2.fromOffset(6,5),Size=UDim2.new(.40,-8,0,24),
+            BackgroundColor3=card,BorderSizePixel=0,Text=row.name or "",
+            PlaceholderText="Armor name",ClearTextOnFocus=false,TextColor3=ink,
+            Font=Enum.Font.Gotham,TextSize=10
+        },f)
+        row.powerBox=create("TextBox",{
+            Position=UDim2.new(.40,0,0,5),Size=UDim2.new(.25,-8,0,24),
+            BackgroundColor3=card,BorderSizePixel=0,Text=row.power or "",
+            PlaceholderText="Min power",ClearTextOnFocus=false,TextColor3=ink,
+            Font=Enum.Font.Gotham,TextSize=10
+        },f)
+        create("UICorner",{CornerRadius=UDim.new(0,5)},row.nameBox)
+        create("UICorner",{CornerRadius=UDim.new(0,5)},row.powerBox)
+        local physical=create("TextButton",{
+            Position=UDim2.new(.65,0,0,5),Size=UDim2.new(.10,-4,0,24),
+            BackgroundColor3=row.type=="physical" and blue or card,BorderSizePixel=0,
+            TextColor3=ink,Font=Enum.Font.GothamMedium,TextSize=8,Text="Physical"
+        },f)
+        local spell=create("TextButton",{
+            Position=UDim2.new(.75,0,0,5),Size=UDim2.new(.10,-4,0,24),
+            BackgroundColor3=row.type=="spell" and blue or card,BorderSizePixel=0,
+            TextColor3=ink,Font=Enum.Font.GothamMedium,TextSize=8,Text="Spell"
+        },f)
+        local minus=create("TextButton",{
+            Position=UDim2.new(1,-78,0,5),Size=UDim2.fromOffset(32,24),
+            BackgroundColor3=card,BorderSizePixel=0,TextColor3=ink,
+            Font=Enum.Font.GothamBold,TextSize=15,Text="−"
+        },f)
+        local plus=create("TextButton",{
+            Position=UDim2.new(1,-40,0,5),Size=UDim2.fromOffset(32,24),
+            BackgroundColor3=blue,BorderSizePixel=0,TextColor3=ink,
+            Font=Enum.Font.GothamBold,TextSize=15,Text="+"
+        },f)
+        for _,b in ipairs({physical,spell,minus,plus}) do create("UICorner",{CornerRadius=UDim.new(0,5)},b) end
+        connect(row.nameBox:GetPropertyChangedSignal("Text"),function() row.name=row.nameBox.Text;revision=revision+1;updateButtons() end)
+        connect(row.powerBox:GetPropertyChangedSignal("Text"),function() row.power=row.powerBox.Text;revision=revision+1;updateButtons() end)
+        connect(physical.MouseButton1Click,function() row.type="physical";rebuildPotentialRows();revision=revision+1;updateButtons() end)
+        connect(spell.MouseButton1Click,function() row.type="spell";rebuildPotentialRows();revision=revision+1;updateButtons() end)
+        connect(plus.MouseButton1Click,function()
+            table.insert(potentialRows,index+1,{name="",power="",type=nil})
+            rebuildPotentialRows();revision=revision+1;updateButtons()
+        end)
+        connect(minus.MouseButton1Click,function()
+            if #potentialRows<=1 then row.name="";row.power="";row.type=nil else table.remove(potentialRows,index) end
+            rebuildPotentialRows();revision=revision+1;updateButtons()
+        end)
+    end
+end
+table.insert(potentialRows,{name="",power="",type=nil})
+
+label(body,"KEEP ABILITY",0,594,1,24,12)
+label(body,"Amount 0 = OFF. Names entered = keep only those abilities; all other abilities are sold.",0,618,1,20,10).TextColor3=muted
+local abilityAmount=create("TextBox",{
+    Position=UDim2.fromOffset(0,644),Size=UDim2.new(.25,0,0,28),Text="0",
+    ClearTextOnFocus=false,BackgroundColor3=card,BorderSizePixel=0,
+    TextColor3=ink,Font=Enum.Font.Gotham,TextSize=12,PlaceholderText="Amount"
+},body)
+create("UICorner",{CornerRadius=UDim.new(0,6)},abilityAmount)
+local abilityNames=create("TextBox",{
+    Position=UDim2.new(.28,0,0,644),Size=UDim2.new(.72,-8,0,72),
+    BackgroundColor3=card,BorderSizePixel=0,Text="",
+    PlaceholderText="Ability names, one per line (blank = all abilities)",
+    MultiLine=true,ClearTextOnFocus=false,TextColor3=ink,Font=Enum.Font.Gotham,
+    TextSize=11,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextWrapped=true
+},body)
+create("UICorner",{CornerRadius=UDim.new(0,6)},abilityNames)
+create("UIPadding",{PaddingLeft=UDim.new(0,7),PaddingTop=UDim.new(0,6)},abilityNames)
+
+label(body,"KEEP LEVEL + (0 = OFF)",0,730,.55,24,12)
+local levelBox=create("TextBox",{
+    Position=UDim2.new(.62,0,0,730),Size=UDim2.new(.36,0,0,28),Text="0",
+    ClearTextOnFocus=false,BackgroundColor3=card,BorderSizePixel=0,TextColor3=ink,Font=Enum.Font.Gotham,TextSize=13
+},body)
+create("UICorner",{CornerRadius=UDim.new(0,6)},levelBox)
+label(body,"SELL INTERVAL (SECONDS)",0,766,.55,24,12)
+local intervalBox=create("TextBox",{
+    Position=UDim2.new(.62,0,0,766),Size=UDim2.new(.36,0,0,28),Text="10",
+    ClearTextOnFocus=false,BackgroundColor3=card,BorderSizePixel=0,TextColor3=ink,Font=Enum.Font.Gotham,TextSize=13
+},body)
+create("UICorner",{CornerRadius=UDim.new(0,6)},intervalBox)
+local preview=button(body,"Preview only",0,806,.5,38)
+preview.BackgroundColor3=blue
+local toggle=button(body,"Auto-sell: OFF",.5,806,.5,38)
+local status=label(body,"Preview is safe: it does not sell anything.",0,852,1,48,12)
+status.TextWrapped=true
+status.TextColor3=muted
+local results=create("ScrollingFrame",{
+    Position=UDim2.fromOffset(0,912),Size=UDim2.new(1,-8,0,420),BackgroundColor3=card,
+    BorderSizePixel=0,ScrollBarThickness=5,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y
+},body)
+create("UIPadding",{PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10),PaddingTop=UDim.new(0,8),PaddingBottom=UDim.new(0,8)},results)
+create("UIListLayout",{Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder},results)
+local function row(text,color)
+    create("TextLabel",{Size=UDim2.new(1,-8,0,0),AutomaticSize=Enum.AutomaticSize.Y,BackgroundTransparency=1,
+        Text=text,TextWrapped=true,TextColor3=color or ink,TextSize=12,Font=Enum.Font.Gotham,
+        TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,LayoutOrder=#results:GetChildren()},results)
+end
+row("Click Preview only to see your inventory decisions.",muted)
+rebuildKeepRows()
+rebuildPotentialRows()
+
+local saveWarning=false
+local restoringSettings=true
+
+local function saveSettings()
+    local level=tonumber(levelBox.Text)
+    local interval=tonumber(intervalBox.Text)
+    local amount=tonumber(abilityAmount.Text)
+    local data={
+        auto=auto == true,
+        guiScale=guiScale.Scale,
+        guiSizeX=math.floor(BASE_W*guiScale.Scale+0.5),
+        guiSizeY=math.floor(BASE_H*guiScale.Scale+0.5),
+        guiPosX=frame.Position.X.Scale,
+        guiPosY=frame.Position.Y.Scale,
+        restorePosX=restore.Position.X.Scale,
+        restorePosY=restore.Position.Y.Scale,
+        restorePosOffsetX=restore.Position.X.Offset,
+        restorePosOffsetY=restore.Position.Y.Offset,
+        level=level and level>=0 and level%1==0 and level or 0,
+        interval=interval and interval>=1 and interval<math.huge and interval or 10,
+        abilityAmount=amount and amount>=0 and amount%1==0 and amount or 0,
+        abilityNames=abilityNames.Text,
+        selected=selected,
+        keepRows={},
+        potentialRows={}
+    }
+    for _,r in ipairs(keepRows) do
+        table.insert(data.keepRows,{name=r.name or "",rarities=r.rarities or {}})
+    end
+    for _,r in ipairs(potentialRows) do
+        table.insert(data.potentialRows,{name=r.name or "",power=r.power or "",type=r.type})
+    end
+    saved=data
+    if type(writefile)=="function" then
+        local ok,err=pcall(function() writefile(SETTINGS_FILE,HttpService:JSONEncode(data)) end)
+        if not ok and not saveWarning then
+            saveWarning=true
+            warn("Settings could not be saved: "..tostring(err))
+        end
+    end
+end
+
+function updateButtons()
+    restore.Text=auto and "Seller · ON · Open" or "Seller · OFF · Open"
+    toggle.Text=auto and "Auto-sell: ON" or "Auto-sell: OFF"
+    toggle.BackgroundColor3=auto and red or card
+    for r,b in pairs(rarityButtons) do
+        b.Text=(selected[r] and "✓ " or "○ ")..r
+        b.BackgroundColor3=selected[r] and blue or card
+    end
+    saveSettings()
+end
+
+local function changed()
+    revision=revision+1
+    if restoringSettings then
+        return
+    end
+    updateButtons()
+    status.Text="Settings changed and saveystal Blade|w|n|13|p",
     "Enchanted Demonic Greataxe|w|n|18|p",
     "Enchanted Sea Axes|w|n|2|s",
     "Enchanted Sea Daggers|w|n|2|s",
